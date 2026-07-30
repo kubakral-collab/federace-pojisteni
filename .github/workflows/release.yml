@@ -1,0 +1,195 @@
+name: Windows Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Git tag vydání, například v0.17.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      CARGO_TERM_COLOR: always
+      BUILD_COMMIT: ${{ github.sha }}
+      BUILD_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+    steps:
+      - name: Checkout zdrojů
+        uses: actions/checkout@v4
+
+      - name: Nastavení Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Nastavení Rustu
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Nastavení data sestavení
+        shell: pwsh
+        run: "Add-Content -Path $env:GITHUB_ENV -Value ('BUILD_DATE=' + (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))"
+
+      - name: Instalace závislostí
+        run: npm ci
+
+      - name: Kontrola verze a tagu
+        run: npm run verify:version -- --tag "${{ env.BUILD_TAG }}"
+
+      - name: Kontrola podpisových Secrets
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
+            throw "Chybí GitHub Secret TAURI_SIGNING_PRIVATE_KEY. Release je zastaven."
+          }
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) {
+            throw "Chybí GitHub Secret TAURI_SIGNING_PRIVATE_KEY_PASSWORD. Release je zastaven."
+          }
+
+      - name: Rust testy
+        working-directory: src-tauri
+        run: cargo test --locked --target x86_64-pc-windows-msvc
+
+      - name: Frontend build
+        run: npm run build
+
+      - name: Příprava endpointu aktualizací
+        shell: pwsh
+        run: |
+          $endpoint = "https://github.com/${{ github.repository }}/releases/latest/download/latest.json"
+          (Get-Content "src-tauri/tauri.release.conf.json" -Raw).Replace("__UPDATER_ENDPOINT__", $endpoint) |
+            Set-Content -Encoding utf8 "src-tauri/tauri.release.generated.conf.json"
+
+      - name: Vytvoření prázdného databázového zdroje
+        run: python scripts/create-empty-database.py dd.sqlite
+
+      - name: Tauri Windows x64 build
+        run: npm run tauri -- build --config src-tauri/tauri.release.generated.conf.json --target x86_64-pc-windows-msvc --bundles nsis,msi
+
+      - name: Sestavení ověřovače podpisu
+        run: cargo build --release --locked --manifest-path tools/updater-signature-verifier/Cargo.toml
+
+      - name: Ověření podpisu a negativní scénáře
+        shell: pwsh
+        run: |
+          $target = "src-tauri/target/x86_64-pc-windows-msvc/release"
+          $updater = Get-ChildItem "$target/bundle/nsis/*-setup.exe" -File | Select-Object -First 1
+          if (-not $updater) { throw "Chybí NSIS updater balíček." }
+          $signature = Get-Item "$($updater.FullName).sig" -ErrorAction Stop
+          $verifier = "tools/updater-signature-verifier/target/release/updater-signature-verifier.exe"
+          & $verifier "src-tauri/updater-public.key" $updater.FullName $signature.FullName
+          if ($LASTEXITCODE -ne 0) { throw "Platný produkční podpis nebyl ověřen." }
+
+          $testDir = Join-Path $env:RUNNER_TEMP "updater-signature-tests"
+          New-Item -ItemType Directory -Force $testDir | Out-Null
+          $tampered = Join-Path $testDir "tampered.nsis.zip"
+          Copy-Item $updater.FullName $tampered
+          $bytes = [IO.File]::ReadAllBytes($tampered)
+          $bytes[0] = $bytes[0] -bxor 1
+          [IO.File]::WriteAllBytes($tampered, $bytes)
+          $ErrorActionPreference = "Continue"
+          & $verifier "src-tauri/updater-public.key" $tampered $signature.FullName 2>$null
+          $tamperedResult = $LASTEXITCODE
+          $ErrorActionPreference = "Stop"
+          if ($tamperedResult -eq 0) { throw "Pozměněný balíček byl chybně přijat." }
+
+          $foreignPassword = [Guid]::NewGuid().ToString("N") + [Guid]::NewGuid().ToString("N")
+          $foreignKey = Join-Path $testDir "foreign.key"
+          npm run tauri -- signer generate --ci --password $foreignPassword --write-keys $foreignKey 1>$null 2>$null
+          if ($LASTEXITCODE -ne 0) { throw "Testovací cizí klíč se nepodařilo vytvořit." }
+          $foreignArtifact = Join-Path $testDir "foreign.nsis.zip"
+          Copy-Item $updater.FullName $foreignArtifact
+          npm run tauri -- signer sign --private-key-path $foreignKey --password $foreignPassword $foreignArtifact 1>$null 2>$null
+          if ($LASTEXITCODE -ne 0) { throw "Testovací cizí podpis se nepodařilo vytvořit." }
+          $ErrorActionPreference = "Continue"
+          & $verifier "src-tauri/updater-public.key" $foreignArtifact "$foreignArtifact.sig" 2>$null
+          $foreignResult = $LASTEXITCODE
+
+          & $verifier "src-tauri/updater-public.key" $updater.FullName (Join-Path $testDir "missing.sig") 2>$null
+          $missingResult = $LASTEXITCODE
+          $ErrorActionPreference = "Stop"
+          if ($foreignResult -eq 0) { throw "Balíček podepsaný cizím klíčem byl chybně přijat." }
+          if ($missingResult -eq 0) { throw "Balíček bez podpisu byl chybně přijat." }
+          Remove-Item -Recurse -Force $testDir
+
+      - name: Kontrola a příprava artefaktů
+        id: artifacts
+        shell: pwsh
+        run: |
+          $target = "src-tauri/target/x86_64-pc-windows-msvc/release"
+          $exe = Get-Item "$target/pojisteni-klienti.exe" -ErrorAction Stop
+          $nsis = Get-ChildItem "$target/bundle/nsis/*-setup.exe" -File | Select-Object -First 1
+          $msi = Get-ChildItem "$target/bundle/msi/*.msi" -File | Select-Object -First 1
+          $updater = $nsis
+          if (-not $nsis) { throw "Chybí NSIS instalátor." }
+          if (-not $msi) { throw "Chybí MSI instalátor." }
+          if (-not $updater) { throw "Chybí podepsaný updater balíček." }
+          $signature = Get-Item "$($updater.FullName).sig" -ErrorAction Stop
+          New-Item -ItemType Directory -Force release-assets | Out-Null
+          Copy-Item $exe.FullName "release-assets/pojisteni-klienti.exe"
+          Copy-Item $nsis.FullName "release-assets/$($nsis.Name)"
+          Copy-Item $msi.FullName "release-assets/$($msi.Name)"
+          Copy-Item $signature.FullName "release-assets/$($signature.Name)"
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $assetName = [Uri]::EscapeDataString($updater.Name)
+          $downloadUrl = "https://github.com/${{ github.repository }}/releases/download/${{ env.BUILD_TAG }}/$assetName"
+          $releaseNotes = "Release ${{ env.BUILD_TAG }}`n`nDatum sestavení: $env:BUILD_DATE"
+          $manifest = [ordered]@{
+            version = $version
+            notes = $releaseNotes
+            pub_date = $env:BUILD_DATE
+            platforms = [ordered]@{
+              "windows-x86_64" = [ordered]@{
+                signature = (Get-Content $signature.FullName -Raw).Trim()
+                url = $downloadUrl
+              }
+            }
+          }
+          $manifest | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 "release-assets/latest.json"
+          $required = @(
+            "release-assets/pojisteni-klienti.exe",
+            "release-assets/$($nsis.Name)",
+            "release-assets/$($msi.Name)",
+            "release-assets/$($signature.Name)",
+            "release-assets/latest.json"
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path $file -PathType Leaf)) { throw "Chybí povinný artefakt: $file" }
+          }
+          $publishedManifest = Get-Content "release-assets/latest.json" -Raw | ConvertFrom-Json
+          if (-not $publishedManifest.platforms.'windows-x86_64'.signature) { throw "Manifest neobsahuje podpis updateru." }
+          if (-not $publishedManifest.platforms.'windows-x86_64'.url) { throw "Manifest neobsahuje URL updateru." }
+          $releaseNotes | Set-Content -Encoding utf8 release-body.md
+
+      - name: Uložení CI artefaktů
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-${{ env.BUILD_TAG }}
+          path: release-assets/*
+          if-no-files-found: error
+
+      - name: Vytvoření GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.BUILD_TAG }}
+          name: Pojištění ${{ env.BUILD_TAG }}
+          body_path: release-body.md
+          files: release-assets/*
+          fail_on_unmatched_files: true

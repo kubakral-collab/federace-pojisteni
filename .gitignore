@@ -1,0 +1,68 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules/
+dist/
+dist-ssr
+target/
+*.local
+
+# Databases and live SQLite sidecar files must never be committed.
+dd.sqlite
+dd.sqlite-shm
+dd.sqlite-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+*.accdb
+*.mdb
+*.laccdb
+
+# Local forensic exports can contain production metadata and personal data.
+_scope-work/
+docs/forensic-audit/
+docs/screenshots/
+docs/access-audit.md
+docs/forms-inventory.md
+docs/member-detail-field-inventory.md
+docs/migration-map.md
+docs/pojistenci-controls-export.md
+docs/pojistenci-oc-mapping.md
+docs/reports-inventory.md
+docs/sprint-03-scope.md
+docs/sprint-12-access-audit.md
+dd_report.json
+dd_tables.csv
+dd_warnings.txt
+src-tauri/2
+
+# Local environment and credentials.
+.env
+.env.*
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Production updater signing secrets must stay outside the repository.
+*.key
+!src-tauri/updater-public.key
+*.key.pem
+signing-password*
+updater-signing-private*
+src-tauri/tauri.release.generated.conf.json
+.codex-permissions.txt
