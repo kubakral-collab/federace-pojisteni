@@ -63,6 +63,9 @@ jobs:
             throw "Chybí GitHub Secret TAURI_SIGNING_PRIVATE_KEY_PASSWORD. Release je zastaven."
           }
 
+      - name: Vytvoření prázdného databázového zdroje
+        run: python scripts/create-empty-database.py dd.sqlite
+
       - name: Rust testy
         working-directory: src-tauri
         run: cargo test --locked --target x86_64-pc-windows-msvc
@@ -76,9 +79,6 @@ jobs:
           $endpoint = "https://github.com/${{ github.repository }}/releases/latest/download/latest.json"
           (Get-Content "src-tauri/tauri.release.conf.json" -Raw).Replace("__UPDATER_ENDPOINT__", $endpoint) |
             Set-Content -Encoding utf8 "src-tauri/tauri.release.generated.conf.json"
-
-      - name: Vytvoření prázdného databázového zdroje
-        run: python scripts/create-empty-database.py dd.sqlite
 
       - name: Tauri Windows x64 build
         run: npm run tauri -- build --config src-tauri/tauri.release.generated.conf.json --target x86_64-pc-windows-msvc --bundles nsis,msi
