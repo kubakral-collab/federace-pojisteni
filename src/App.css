@@ -386,6 +386,17 @@ button {
 .build-metadata dt { color: var(--muted); }
 .build-metadata dd { margin: 0; overflow-wrap: anywhere; }
 
+.about-update-controls {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.about-update-controls .checkbox {
+  color: #fff;
+}
+
 .about-card img {
   width: 150px;
   height: 105px;

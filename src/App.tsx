@@ -848,6 +848,7 @@ export default function App() {
   const [updateInstalling, setUpdateInstalling] = useState(false);
   const [updateProgress, setUpdateProgress] = useState<number | null>(null);
   const [updateMessage, setUpdateMessage] = useState("");
+  const [updaterStatus, setUpdaterStatus] = useState("Dosud nezkontrolováno");
   const [backupBusy, setBackupBusy] = useState(false);
   const [backups, setBackups] = useState<BackupInfo[]>([]);
   const [backupsLoading, setBackupsLoading] = useState(false);
@@ -887,10 +888,12 @@ export default function App() {
 
   async function checkForUpdates(manual = false) {
     if (!isTauri()) {
+      setUpdaterStatus("Dostupné pouze v nainstalované aplikaci");
       if (manual) setUpdateMessage("Kontrola aktualizací je dostupná v nainstalované aplikaci.");
       return;
     }
     setUpdateChecking(true);
+    setUpdaterStatus("Kontroluji aktualizace…");
     setUpdateMessage("");
     try {
       const update = await check({ timeout: 15_000 });
@@ -903,13 +906,24 @@ export default function App() {
       if (update) {
         console.info("Updater: nalezena nová verze");
         setAvailableUpdate(update);
+        setUpdaterStatus(`Dostupná verze ${update.version}`);
       } else {
         console.info("Updater: není novější verze");
+        setUpdaterStatus("Aplikace je aktuální");
         if (manual) setUpdateMessage("Používáte aktuální verzi aplikace.");
       }
-    } catch {
+    } catch (reason) {
       console.error("Updater: chyba updateru");
-      if (manual) {
+      const errorText = String(reason).toLowerCase();
+      const releaseNotFound = errorText.includes("404") || errorText.includes("not found");
+      if (releaseNotFound) {
+        const message = "Nebyla nalezena žádná publikovaná verze.";
+        setUpdaterStatus(message);
+        setUpdateMessage(message);
+      } else {
+        setUpdaterStatus("Kontrola se nezdařila");
+      }
+      if (manual && !releaseNotFound) {
         setUpdateMessage("Aktualizace se nyní nepodařilo ověřit. Aplikaci můžete dál používat.");
       }
     } finally {
@@ -920,6 +934,7 @@ export default function App() {
   async function installAvailableUpdate() {
     if (!availableUpdate) return;
     setUpdateInstalling(true);
+    setUpdaterStatus("Stahuji aktualizaci…");
     setUpdateMessage("");
     setUpdateProgress(0);
     let downloaded = 0;
@@ -937,9 +952,11 @@ export default function App() {
         }
       });
       console.info("Updater: instalace dokončena");
+      setUpdaterStatus("Instalace dokončena");
       await relaunch();
     } catch {
       console.error("Updater: chyba updateru");
+      setUpdaterStatus("Instalace se nezdařila");
       setUpdateMessage("Aktualizaci se nepodařilo dokončit. Aplikaci můžete dál používat.");
       setUpdateInstalling(false);
     }
@@ -1090,7 +1107,7 @@ export default function App() {
   ]);
 
   useEffect(() => {
-    if (screen !== "Přehled") return;
+    if (screen !== "Přehled" && screen !== "O programu") return;
     if (preview) return;
     invoke<DashboardInfo>("get_dashboard")
       .then(setDashboard)
@@ -2037,13 +2054,24 @@ export default function App() {
               <strong>Verze {dashboard?.programVersion ?? "0.17.0"}</strong>
               <dl className="build-metadata">
                 <div><dt>Git tag</dt><dd>{dashboard?.gitTag ?? "neuvedeno"}</dd></div>
-                <div><dt>Commit</dt><dd>{dashboard?.commitSha ?? "lokální sestavení"}</dd></div>
-                <div><dt>Datum sestavení</dt><dd>{dashboard?.buildDate ?? "neuvedeno"}</dd></div>
+                <div><dt>Commit SHA</dt><dd>{dashboard?.commitSha ?? "lokální sestavení"}</dd></div>
+                <div><dt>Datum buildu</dt><dd>{dashboard?.buildDate ? displayDateTime(dashboard.buildDate) : "neuvedeno"}</dd></div>
                 <div><dt>Poslední kontrola aktualizací</dt><dd>{lastUpdateCheck}</dd></div>
+                <div><dt>Stav updateru</dt><dd>{updaterStatus}</dd></div>
               </dl>
-              <button className="primary" disabled={updateChecking} onClick={() => void checkForUpdates(true)}>
-                {updateChecking ? "Kontroluji…" : "Vyhledat aktualizace"}
-              </button>
+              <div className="about-update-controls">
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={updateCheckEnabled}
+                    onChange={(event) => changeUpdateCheckEnabled(event.target.checked)}
+                  />
+                  Kontrolovat aktualizace při spuštění
+                </label>
+                <button className="primary" disabled={updateChecking} onClick={() => void checkForUpdates(true)}>
+                  {updateChecking ? "Kontroluji…" : "Vyhledat aktualizace"}
+                </button>
+              </div>
               {updateMessage && <div className="message info">{updateMessage}</div>}
             </div>
           </section>

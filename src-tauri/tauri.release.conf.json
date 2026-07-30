@@ -1,11 +1,5 @@
 {
   "bundle": {
     "createUpdaterArtifacts": true
-  },
-  "plugins": {
-    "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFCQjc3RjA3QjkzOTU2N0UKUldSK1ZqbTVCMyszcTlOZUxvRlVKaC9RQ0VYNmRlQm9DaXdveTdsZkREQmtmTU9FZzU0MW1iWFQK",
-      "endpoints": ["__UPDATER_ENDPOINT__"]
-    }
   }
 }
