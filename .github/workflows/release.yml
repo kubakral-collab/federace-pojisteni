@@ -150,12 +150,15 @@ jobs:
           if (-not $updater) { throw "Chybí podepsaný updater balíček." }
           $signature = Get-Item "$($updater.FullName).sig" -ErrorAction Stop
           New-Item -ItemType Directory -Force release-assets | Out-Null
-          Copy-Item $exe.FullName "release-assets/pojisteni-klienti.exe"
-          Copy-Item $nsis.FullName "release-assets/$($nsis.Name)"
-          Copy-Item $msi.FullName "release-assets/$($msi.Name)"
-          Copy-Item $signature.FullName "release-assets/$($signature.Name)"
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          $assetName = [Uri]::EscapeDataString($updater.Name)
+          $publishedNsisName = "Pojisteni_${version}_x64-setup.exe"
+          $publishedSignatureName = "$publishedNsisName.sig"
+          $publishedMsiName = "Pojisteni_${version}_x64_cs-CZ.msi"
+          Copy-Item $exe.FullName "release-assets/pojisteni-klienti.exe"
+          Copy-Item $nsis.FullName "release-assets/$publishedNsisName"
+          Copy-Item $msi.FullName "release-assets/$publishedMsiName"
+          Copy-Item $signature.FullName "release-assets/$publishedSignatureName"
+          $assetName = [Uri]::EscapeDataString($publishedNsisName)
           $downloadUrl = "https://github.com/${{ github.repository }}/releases/download/${{ env.BUILD_TAG }}/$assetName"
           $releaseNotes = "Release ${{ env.BUILD_TAG }}`n`nDatum sestavení: $env:BUILD_DATE"
           $manifest = [ordered]@{
@@ -172,9 +175,9 @@ jobs:
           $manifest | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 "release-assets/latest.json"
           $required = @(
             "release-assets/pojisteni-klienti.exe",
-            "release-assets/$($nsis.Name)",
-            "release-assets/$($msi.Name)",
-            "release-assets/$($signature.Name)",
+            "release-assets/$publishedNsisName",
+            "release-assets/$publishedMsiName",
+            "release-assets/$publishedSignatureName",
             "release-assets/latest.json"
           )
           foreach ($file in $required) {
