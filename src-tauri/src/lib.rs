@@ -1,8 +1,10 @@
 mod claims;
 mod current_insurance_year;
 mod database_backup;
+mod email_service;
 mod member_payments;
 mod payments;
+mod receipts;
 mod tariffs;
 
 use argon2::{
@@ -356,6 +358,8 @@ fn ensure_current_insurance_year(path: &Path) -> Result<i32, String> {
     payments::ensure_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
     member_payments::ensure_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
     claims::ensure_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
+    email_service::ensure_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
+    receipts::ensure_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
     CurrentInsuranceYear::initialize(&mut connection, path, Local::now().year())
 }
 
@@ -1479,14 +1483,143 @@ fn save_member_payment(
     let variable_symbol =
         payments::variable_symbol(member.personal_id.as_deref().unwrap_or_default())?;
     drop(connection);
-    member_payments::save(
+    let row_id = payment.insurance_row_id;
+    let payment_id = member_payments::save(
         &path,
         &user,
         &identifier,
         active_year,
         &variable_symbol,
         payment,
+    )?;
+    let _ = receipts::create_if_eligible(&path, &user, row_id, active_year, true);
+    Ok(payment_id)
+}
+
+#[tauri::command]
+fn get_email_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<email_service::EmailSettings, String> {
+    require_admin(&state)?;
+    let path = working_database_path(&app)?;
+    email_service::load(&open_write(&path)?)
+}
+
+#[tauri::command]
+fn save_email_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    settings: email_service::SaveEmailSettings,
+) -> Result<(), String> {
+    require_admin(&state)?;
+    let path = working_database_path(&app)?;
+    email_service::save(&open_write(&path)?, settings)
+}
+
+#[tauri::command]
+fn get_receipt_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<receipts::ReceiptSettings, String> {
+    require_admin(&state)?;
+    let path = working_database_path(&app)?;
+    receipts::load_settings(&open_write(&path)?)
+}
+
+#[tauri::command]
+fn save_receipt_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    settings: receipts::ReceiptSettings,
+) -> Result<(), String> {
+    require_admin(&state)?;
+    let path = working_database_path(&app)?;
+    receipts::save_settings(&open_write(&path)?, &settings)
+}
+
+#[tauri::command]
+fn list_receipts(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    member_row_id: Option<i64>,
+    search: Option<String>,
+) -> Result<Vec<receipts::Receipt>, String> {
+    authenticated_user(&state)?;
+    let path = working_database_path(&app)?;
+    receipts::list(
+        &open_write(&path)?,
+        member_row_id,
+        search.as_deref().unwrap_or_default(),
     )
+}
+
+#[tauri::command]
+fn create_receipt(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    row_id: i64,
+) -> Result<Option<i64>, String> {
+    let user = authenticated_user(&state)?;
+    let path = working_database_path(&app)?;
+    let year = ensure_current_insurance_year(&path)?;
+    receipts::create_if_eligible(&path, &user, row_id, year, false)
+}
+
+#[tauri::command]
+fn export_receipt_pdf(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<Option<String>, String> {
+    let user = authenticated_user(&state)?;
+    let path = working_database_path(&app)?;
+    let connection = open_write(&path)?;
+    let (name, bytes) = receipts::pdf(&connection, id)?;
+    let selected = rfd::FileDialog::new()
+        .set_title("Uložit doklad o zaplacení")
+        .set_file_name(&name)
+        .add_filter("Dokument PDF", &["pdf"])
+        .save_file();
+    let Some(destination) = selected else {
+        return Ok(None);
+    };
+    fs::write(&destination, bytes).map_err(|_| "Doklad se nepodařilo uložit.".to_string())?;
+    connection.execute(r#"INSERT INTO "AuditDokladu"("Uzivatel","IdDokladu","IdentifikatorClena","Operace","Vysledek") SELECT ?1,"Id","IdentifikatorClena",'EXPORT PDF','OK' FROM "DokladyOUhrade" WHERE "Id"=?2"#,params![user,id]).ok();
+    Ok(Some(destination.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+fn open_receipt_pdf(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+    print: bool,
+) -> Result<(), String> {
+    let user = authenticated_user(&state)?;
+    let path = working_database_path(&app)?;
+    let connection = open_write(&path)?;
+    let (name, bytes) = receipts::pdf(&connection, id)?;
+    let destination = std::env::temp_dir().join(name);
+    fs::write(&destination, bytes).map_err(|_| "Doklad se nepodařilo otevřít.".to_string())?;
+    let mut command = Command::new("powershell.exe");
+    let verb = if print { "Print" } else { "Open" };
+    command
+        .args(["-NoProfile", "-Command", "Start-Process", "-LiteralPath"])
+        .arg(&destination)
+        .args(["-Verb", verb, "-WindowStyle", "Hidden"]);
+    command
+        .spawn()
+        .map_err(|_| "Doklad se nepodařilo otevřít.".to_string())?;
+    connection.execute(r#"INSERT INTO "AuditDokladu"("Uzivatel","IdDokladu","IdentifikatorClena","Operace","Vysledek") SELECT ?1,"Id","IdentifikatorClena",?2,'OK' FROM "DokladyOUhrade" WHERE "Id"=?3"#,params![user,if print{"TISK"}else{"NÁHLED"},id]).ok();
+    Ok(())
+}
+
+#[tauri::command]
+fn send_receipt_email(app: AppHandle, state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    let user = authenticated_user(&state)?;
+    let path = working_database_path(&app)?;
+    receipts::send(&path, &user, id)
 }
 
 #[tauri::command]
@@ -1857,10 +1990,19 @@ pub fn run() {
             save_tariff_rate,
             get_payment_settings,
             save_payment_settings,
+            get_email_settings,
+            save_email_settings,
+            get_receipt_settings,
+            save_receipt_settings,
             prepare_payment_order,
             list_member_payments,
             save_member_payment,
             delete_member_payment,
+            list_receipts,
+            create_receipt,
+            export_receipt_pdf,
+            open_receipt_pdf,
+            send_receipt_email,
             generate_payment_order_pdf,
             audit_payment_order_print,
             open_generated_pdf,

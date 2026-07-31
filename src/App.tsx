@@ -39,7 +39,14 @@ import { SETTINGS_MODULES } from "./modules/settings";
 const UPDATE_CHECK_ENABLED_KEY = "pojisteni.updateCheckEnabled";
 const LAST_UPDATE_CHECK_KEY = "pojisteni.lastUpdateCheck";
 
-type Screen = "Vstup" | "Přehled" | "Pojištěnci" | "Seznam" | "Nová pojistná událost" | "Příkaz k úhradě" | "Archiv" | "Správa záloh" | "Nastavení" | "O programu";
+type Screen = "Vstup" | "Přehled" | "Pojištěnci" | "Seznam" | "Doklady o zaplacení" | "Nová pojistná událost" | "Příkaz k úhradě" | "Archiv" | "Správa záloh" | "Nastavení" | "O programu";
+
+type Receipt = {
+  id: number; memberRowId: number; memberIdentifier: string; paymentId: number;
+  registrationNumber: string; memberName: string; insuranceYear: number;
+  paidOn: string; issuedOn: string; amount: number; contractNumber: string;
+  status: string; emailStatus: string; sentAt?: string; recipientEmail?: string; checksum: string;
+};
 
 type BackupInfo = {
   path: string;
@@ -153,6 +160,9 @@ type PaymentSettings = {
   defaultDueDays: number;
   messageTemplate: string;
 };
+
+type EmailSettings = { server: string; port: number; username: string; senderEmail: string; encryption: string; credentialName: string; passwordConfigured: boolean; password?: string };
+type ReceiptSettings = { automaticCreation: boolean; automaticSending: boolean; emailSubject: string; emailBody: string; policyholder: string; contractNumber: string };
 
 type PaymentOrderDraft = {
   rowId: number;
@@ -706,6 +716,7 @@ function Shell({ active, user, onNavigate, onLogout, updater, backupBusy, onCrea
     { screen: "Přehled", label: "Hlavní panel", icon: <LayoutDashboard /> },
     { screen: "Pojištěnci", label: "Nový pojištěnec", icon: <UserPlus /> },
     { screen: "Seznam", label: "Seznam pojištěnců", icon: <Users /> },
+    { screen: "Doklady o zaplacení", label: "Doklady o zaplacení", icon: <FileText /> },
     { screen: "Archiv", label: "Archiv", icon: <Archive /> },
     { screen: "Správa záloh", label: "Správa záloh", icon: <FolderArchive /> },
     { screen: "Nastavení", label: "Nastavení", icon: <Settings /> },
@@ -819,7 +830,7 @@ export default function App() {
   const [memberAuditHistory, setMemberAuditHistory] = useState<AuditEntry[]>([]);
   const [historyMember, setHistoryMember] = useState<Member | null>(null);
   const [detailTab, setDetailTab] = useState<
-    "overview" | "personal" | "organization" | "contact" | "insurance" | "payments" | "claims" | "history" | "notes"
+    "overview" | "personal" | "organization" | "contact" | "insurance" | "payments" | "receipts" | "claims" | "history" | "notes"
   >("overview");
   const [editingMember, setEditingMember] = useState(false);
   const [memberEdit, setMemberEdit] = useState<MemberUpdate | null>(null);
@@ -856,12 +867,17 @@ export default function App() {
   const [tariffForm, setTariffForm] = useState<TariffRateInput | null>(null);
   const [tariffsLoading, setTariffsLoading] = useState(false);
   const [paymentSettings, setPaymentSettings] = useState<PaymentSettings | null>(null);
+  const [emailSettings, setEmailSettings] = useState<EmailSettings | null>(null);
+  const [receiptSettings, setReceiptSettings] = useState<ReceiptSettings | null>(null);
   const [paymentLoading, setPaymentLoading] = useState(false);
   const [paymentDraft, setPaymentDraft] = useState<PaymentOrderDraft | null>(null);
   const [lastPaymentPdf, setLastPaymentPdf] = useState("");
   const [returnToMember, setReturnToMember] = useState(false);
   const [memberClaims, setMemberClaims] = useState<Claim[]>([]);
   const [memberPayments, setMemberPayments] = useState<MemberPayment[]>([]);
+  const [receipts, setReceipts] = useState<Receipt[]>([]);
+  const [receiptSearch, setReceiptSearch] = useState("");
+  const [memberReceipts, setMemberReceipts] = useState<Receipt[]>([]);
   const [memberPaymentForm, setMemberPaymentForm] = useState<MemberPaymentForm | null>(null);
   const [claimsLoading, setClaimsLoading] = useState(false);
   const [claimForm, setClaimForm] = useState<ClaimForm | null>(null);
@@ -1062,6 +1078,7 @@ export default function App() {
 
   useEffect(() => {
     if (screen === "Správa záloh" && !preview) void loadDatabaseBackups();
+    if (screen === "Doklady o zaplacení" && !preview) void loadReceipts(undefined, "");
   }, [screen]);
 
   useEffect(() => {
@@ -1235,6 +1252,43 @@ export default function App() {
     setMemberAuditHistory(auditHistory);
   }
 
+  async function loadReceipts(memberRowId?: number, search = receiptSearch) {
+    setError("");
+    try {
+      const loaded = await invoke<Receipt[]>("list_receipts", { memberRowId: memberRowId ?? null, search: search || null });
+      if (memberRowId) setMemberReceipts(loaded); else setReceipts(loaded);
+    } catch (message) {
+      setError(String(message));
+    }
+  }
+
+  async function createMemberReceipt(member: Member) {
+    setSaving(true);
+    setError("");
+    try {
+      const id = await invoke<number | null>("create_receipt", { rowId: member.rowId });
+      await loadReceipts(member.rowId, "");
+      setNotice(id ? "Doklad je připraven." : "Doklad lze vytvořit až po úplné úhradě pojistného.");
+    } catch (message) {
+      setError(String(message));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function receiptAction(command: "open_receipt_pdf" | "export_receipt_pdf" | "send_receipt_email", receipt: Receipt, print = false) {
+    setError("");
+    try {
+      await invoke(command, command === "open_receipt_pdf" ? { id: receipt.id, print } : { id: receipt.id });
+      if (command === "send_receipt_email") {
+        setNotice("Doklad byl odeslán e-mailem.");
+        await loadReceipts(selectedMember?.rowId, selectedMember ? "" : receiptSearch);
+      }
+    } catch (message) {
+      setError(String(message));
+    }
+  }
+
   function newMemberPayment(member: Member) {
     setMemberPaymentForm({ insuranceRowId: member.rowId, receivedOn: new Date().toISOString().slice(0, 10), amount: "", method: "Bankovní převod", note: "" });
   }
@@ -1250,6 +1304,7 @@ export default function App() {
     try {
       await invoke("save_member_payment", { payment: { ...memberPaymentForm, amount: Number(memberPaymentForm.amount), note: optional(memberPaymentForm.note) } });
       await reloadMemberPayments(selectedMember.rowId);
+      await loadReceipts(selectedMember.rowId, "");
       setMemberPaymentForm(null);
       setNotice(memberPaymentForm.id ? "Platba byla upravena." : "Platba byla přidána.");
     } catch (message) {
@@ -1359,6 +1414,26 @@ export default function App() {
     } finally {
       setSaving(false);
     }
+  }
+
+  async function openEmailSettings() {
+    setSettingsSection("email"); setError("");
+    try { setEmailSettings({ ...(await invoke<EmailSettings>("get_email_settings")), password: "" }); } catch (message) { setError(String(message)); }
+  }
+
+  async function saveEmailSettings() {
+    if (!emailSettings) return; setSaving(true); setError("");
+    try { await invoke("save_email_settings", { settings: { ...emailSettings, password: emailSettings.password || null } }); setNotice("Nastavení SMTP bylo uloženo. Heslo je ve Windows Credential Manageru."); await openEmailSettings(); } catch (message) { setError(String(message)); } finally { setSaving(false); }
+  }
+
+  async function openReceiptSettings() {
+    setSettingsSection("receipts"); setError("");
+    try { setReceiptSettings(await invoke<ReceiptSettings>("get_receipt_settings")); } catch (message) { setError(String(message)); }
+  }
+
+  async function saveReceiptSettings() {
+    if (!receiptSettings) return; setSaving(true); setError("");
+    try { await invoke("save_receipt_settings", { settings: receiptSettings }); setNotice("Nastavení dokladů bylo uloženo."); } catch (message) { setError(String(message)); } finally { setSaving(false); }
   }
 
   async function openTariffSettings() {
@@ -1936,6 +2011,39 @@ export default function App() {
         </Shell>
       );
     }
+    if (settingsSection === "email") {
+      return <Shell {...shellUpdater} active="Nastavení" user={user} onNavigate={navigate} onLogout={leaveToLogin}><div className="page payment-settings-page">
+        <header className="page-header"><div><small>Nastavení</small><h1>E-mail (SMTP)</h1></div><button onClick={() => setSettingsSection(null)}><ArrowLeft /> Zpět na nastavení</button></header>
+        {error && <div className="message error">{error}</div>}{notice && <div className="message success">{notice}</div>}
+        {emailSettings && <section className="payment-settings-form">
+          <label>SMTP server<input value={emailSettings.server} onChange={(event) => setEmailSettings({...emailSettings,server:event.target.value})}/></label>
+          <label>Port<input type="number" value={emailSettings.port} onChange={(event) => setEmailSettings({...emailSettings,port:Number(event.target.value)})}/></label>
+          <label>Uživatelské jméno<input value={emailSettings.username} onChange={(event) => setEmailSettings({...emailSettings,username:event.target.value})}/></label>
+          <label>E-mail odesílatele<input type="email" value={emailSettings.senderEmail} onChange={(event) => setEmailSettings({...emailSettings,senderEmail:event.target.value})}/></label>
+          <label>Šifrování<select value={emailSettings.encryption} onChange={(event) => setEmailSettings({...emailSettings,encryption:event.target.value})}><option>STARTTLS</option><option>TLS</option><option>Bez šifrování</option></select></label>
+          <label>Název zabezpečeného záznamu<input value={emailSettings.credentialName} onChange={(event) => setEmailSettings({...emailSettings,credentialName:event.target.value})}/></label>
+          <label className="wide">SMTP heslo<input type="password" value={emailSettings.password ?? ""} placeholder={emailSettings.passwordConfigured ? "Heslo je bezpečně uložené" : "Zadejte heslo"} onChange={(event) => setEmailSettings({...emailSettings,password:event.target.value})}/></label>
+          <p className="wide settings-help">Heslo se ukládá pouze do Windows Credential Manageru a nikdy do databáze.</p>
+          <footer className="form-actions wide"><button className="primary" disabled={saving} onClick={saveEmailSettings}><Save /> Uložit SMTP</button></footer>
+        </section>}
+      </div></Shell>;
+    }
+    if (settingsSection === "receipts") {
+      return <Shell {...shellUpdater} active="Nastavení" user={user} onNavigate={navigate} onLogout={leaveToLogin}><div className="page payment-settings-page">
+        <header className="page-header"><div><small>Nastavení</small><h1>Doklady o zaplacení</h1></div><button onClick={() => setSettingsSection(null)}><ArrowLeft /> Zpět na nastavení</button></header>
+        {error && <div className="message error">{error}</div>}{notice && <div className="message success">{notice}</div>}
+        {receiptSettings && <section className="payment-settings-form">
+          <label className="checkbox wide"><input type="checkbox" checked={receiptSettings.automaticCreation} onChange={(event) => setReceiptSettings({...receiptSettings,automaticCreation:event.target.checked})}/>Automaticky vytvářet po úplné úhradě</label>
+          <label className="checkbox wide"><input type="checkbox" checked={receiptSettings.automaticSending} onChange={(event) => setReceiptSettings({...receiptSettings,automaticSending:event.target.checked})}/>Automaticky odeslat doklad po úplné úhradě</label>
+          <label>Pojistník<input value={receiptSettings.policyholder} onChange={(event) => setReceiptSettings({...receiptSettings,policyholder:event.target.value})}/></label>
+          <label>Číslo smlouvy<input value={receiptSettings.contractNumber} onChange={(event) => setReceiptSettings({...receiptSettings,contractNumber:event.target.value})}/></label>
+          <label className="wide">Předmět e-mailu<input value={receiptSettings.emailSubject} onChange={(event) => setReceiptSettings({...receiptSettings,emailSubject:event.target.value})}/></label>
+          <label className="wide">Text e-mailu<textarea value={receiptSettings.emailBody} onChange={(event) => setReceiptSettings({...receiptSettings,emailBody:event.target.value})}/></label>
+          <p className="wide settings-help">Loga, podpis a razítko jsou převzaty z ověřené Access předlohy a nejsou uživatelsky měněny.</p>
+          <footer className="form-actions wide"><button className="primary" disabled={saving} onClick={saveReceiptSettings}><Save /> Uložit nastavení</button></footer>
+        </section>}
+      </div></Shell>;
+    }
     if (settingsSection === "tariffs") {
       return (
         <Shell {...shellUpdater} active="Nastavení" user={user} onNavigate={navigate} onLogout={leaveToLogin}>
@@ -2030,7 +2138,7 @@ export default function App() {
               <article
                 key={module.id}
                 className={module.enabled ? "enabled" : ""}
-                onClick={module.id === "tariffs" ? openTariffSettings : module.id === "payments" ? openPaymentSettings : module.id === "updates" ? () => setSettingsSection("updates") : module.id === "backups" ? () => navigate("Správa záloh") : undefined}
+                onClick={module.id === "tariffs" ? openTariffSettings : module.id === "payments" ? openPaymentSettings : module.id === "email" ? openEmailSettings : module.id === "receipts" ? openReceiptSettings : module.id === "updates" ? () => setSettingsSection("updates") : module.id === "backups" ? () => navigate("Správa záloh") : undefined}
               >
                 {module.id === "payments" ? <CreditCard /> : <Settings />}<strong>{module.label}</strong>
                 <small>{module.enabled ? "Otevřít nastavení" : "Připravujeme"}</small>
@@ -2261,6 +2369,35 @@ export default function App() {
     );
   }
 
+  if (screen === "Doklady o zaplacení") {
+    return (
+      <Shell {...shellUpdater} active="Doklady o zaplacení" user={user} onNavigate={navigate} onLogout={leaveToLogin}>
+        <div className="page">
+          <header className="page-header"><div><small>Dokumenty</small><h1>Doklady o zaplacení</h1></div></header>
+          {error && <div className="message error">{error}</div>}
+          {notice && <div className="message success">{notice}</div>}
+          <form className="search-bar" onSubmit={(event) => { event.preventDefault(); void loadReceipts(undefined, receiptSearch); }}>
+            <Search /><input value={receiptSearch} onChange={(event) => setReceiptSearch(event.target.value)} placeholder="Jméno, evidenční číslo, rok nebo e-mail" />
+            <button className="primary">Vyhledat</button>
+          </form>
+          <div className="claims-table receipts-table"><table>
+            <thead><tr><th>Evidenční číslo</th><th>Jméno a příjmení</th><th>Rok</th><th>Datum úhrady</th><th>Datum vystavení</th><th>Částka</th><th>Doklad</th><th>E-mail</th><th>Akce</th></tr></thead>
+            <tbody>{receipts.map((receipt) => <tr key={receipt.id}>
+              <td>{receipt.registrationNumber}</td><td>{receipt.memberName}</td><td>{receipt.insuranceYear}</td><td>{displayDate(receipt.paidOn)}</td><td>{displayDate(receipt.issuedOn)}</td><td>{displayCurrency(receipt.amount)}</td><td>{receipt.status}</td><td>{receipt.emailStatus}</td>
+              <td className="row-actions">
+                <button title="Otevřít detail člena" onClick={() => { setScreen("Seznam"); void openMember(receipt.memberRowId); }}><Users /></button>
+                <button title="Náhled" onClick={() => void receiptAction("open_receipt_pdf", receipt)}><FileText /></button>
+                <button title="Tisk" onClick={() => void receiptAction("open_receipt_pdf", receipt, true)}><Printer /></button>
+                <button title="Export PDF" onClick={() => void receiptAction("export_receipt_pdf", receipt)}><Upload /></button>
+                <button title={receipt.emailStatus === "Odeslán" ? "Odeslat znovu" : "Odeslat e-mailem"} onClick={() => void receiptAction("send_receipt_email", receipt)}><Mail /></button>
+              </td>
+            </tr>)}{receipts.length === 0 && <tr><td colSpan={9} className="empty-row">Nebyly nalezeny žádné vystavené doklady.</td></tr>}</tbody>
+          </table></div>
+        </div>
+      </Shell>
+    );
+  }
+
   if (screen === "Seznam") {
     const pages = Math.max(1, Math.ceil(memberPage.total / memberPage.pageSize));
     if (selectedMember) {
@@ -2271,6 +2408,7 @@ export default function App() {
         ["contact", "Kontakt"],
         ["insurance", "Pojištění"],
         ["payments", "💰 Platby"],
+        ["receipts", "📄 Doklady o zaplacení"],
         ["claims", "Pojistné události"],
         ["history", "Historie"],
         ["notes", "Poznámky"],
@@ -2344,6 +2482,7 @@ export default function App() {
                       setDetailTab(id);
                       setHistoryMember(null);
                       if (id === "claims") void loadMemberClaims(selectedMember);
+                      if (id === "receipts") void loadReceipts(selectedMember.rowId, "");
                     }}
                   >
                     {label}
@@ -2413,6 +2552,18 @@ export default function App() {
                       </tbody>
                     </table>
                   </div>
+                </div>
+              )}
+              {detailTab === "receipts" && (
+                <div className="member-payments-section">
+                  <header className="member-payments-header"><h2>Doklady o zaplacení</h2><button className="primary" disabled={saving} onClick={() => void createMemberReceipt(selectedMember)}><Plus /> Vytvořit nový doklad</button></header>
+                  <div className="claims-table"><table>
+                    <thead><tr><th>Datum vystavení</th><th>Datum úhrady</th><th>Rok</th><th>Částka</th><th>Číslo smlouvy</th><th>Stav</th><th>Odeslání</th><th>E-mail</th><th>Akce</th></tr></thead>
+                    <tbody>{memberReceipts.map((receipt) => <tr key={receipt.id}>
+                      <td>{displayDate(receipt.issuedOn)}</td><td>{displayDate(receipt.paidOn)}</td><td>{receipt.insuranceYear}</td><td>{displayCurrency(receipt.amount)}</td><td>{receipt.contractNumber}</td><td>{receipt.status}</td><td>{receipt.emailStatus}{receipt.sentAt ? ` · ${displayDateTime(receipt.sentAt)}` : ""}</td><td>{display(receipt.recipientEmail)}</td>
+                      <td className="row-actions"><button title="Náhled" onClick={() => void receiptAction("open_receipt_pdf", receipt)}><FileText /></button><button title="Tisk" onClick={() => void receiptAction("open_receipt_pdf", receipt, true)}><Printer /></button><button title="Export PDF" onClick={() => void receiptAction("export_receipt_pdf", receipt)}><Upload /></button><button title={receipt.emailStatus === "Odeslán" ? "Odeslat znovu" : "Odeslat e-mailem"} onClick={() => void receiptAction("send_receipt_email", receipt)}><Mail /></button></td>
+                    </tr>)}{memberReceipts.length === 0 && <tr><td colSpan={9} className="empty-row">Člen zatím nemá vystavený doklad.</td></tr>}</tbody>
+                  </table></div>
                 </div>
               )}
               {detailTab === "notes" && <div className="single-detail-section"><NotesSection member={selectedMember} /></div>}

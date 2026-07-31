@@ -1,5 +1,5 @@
 export type SettingsModule = {
-  id: "tariffs" | "payments" | "updates" | "limits" | "organizations" | "users" | "database" | "backups";
+  id: "tariffs" | "payments" | "email" | "receipts" | "updates" | "limits" | "organizations" | "users" | "database" | "backups";
   label: string;
   enabled: boolean;
 };
@@ -7,6 +7,8 @@ export type SettingsModule = {
 export const SETTINGS_MODULES: SettingsModule[] = [
   { id: "tariffs", label: "Sazby pojistného", enabled: true },
   { id: "payments", label: "Platební údaje", enabled: true },
+  { id: "email", label: "E-mail (SMTP)", enabled: true },
+  { id: "receipts", label: "Doklady o zaplacení", enabled: true },
   { id: "updates", label: "Aktualizace", enabled: true },
   { id: "limits", label: "Limity pojištění", enabled: false },
   { id: "organizations", label: "Organizace", enabled: false },
