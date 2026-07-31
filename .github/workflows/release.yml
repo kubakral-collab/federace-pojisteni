@@ -134,6 +134,7 @@ jobs:
           if ($foreignResult -eq 0) { throw "Balíček podepsaný cizím klíčem byl chybně přijat." }
           if ($missingResult -eq 0) { throw "Balíček bez podpisu byl chybně přijat." }
           Remove-Item -Recurse -Force $testDir
+          $global:LASTEXITCODE = 0
 
       - name: Kontrola a příprava artefaktů
         id: artifacts
