@@ -116,7 +116,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Testovací cizí klíč se nepodařilo vytvořit." }
           $foreignArtifact = Join-Path $testDir "foreign.nsis.zip"
           Copy-Item $updater.FullName $foreignArtifact
+          $productionPrivateKey = $env:TAURI_SIGNING_PRIVATE_KEY
+          $productionPassword = $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          $env:TAURI_SIGNING_PRIVATE_KEY = $null
+          $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = $null
           npm run tauri -- signer sign --private-key-path $foreignKey --password $foreignPassword $foreignArtifact 1>$null 2>$null
+          $env:TAURI_SIGNING_PRIVATE_KEY = $productionPrivateKey
+          $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = $productionPassword
           if ($LASTEXITCODE -ne 0) { throw "Testovací cizí podpis se nepodařilo vytvořit." }
           $ErrorActionPreference = "Continue"
           & $verifier "src-tauri/updater-public.key" $foreignArtifact "$foreignArtifact.sig" 2>$null
