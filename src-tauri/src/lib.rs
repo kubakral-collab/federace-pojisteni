@@ -1609,6 +1609,23 @@ fn create_receipt(
 }
 
 #[tauri::command]
+fn get_payment_document_basis(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    row_id: i64,
+) -> Result<receipts::PaymentDocumentBasis, String> {
+    authenticated_user(&state)?;
+    let path = working_database_path(&app)?;
+    let year = ensure_current_insurance_year(&path)?;
+    let connection = open_write(&path)?;
+    let result = receipts::load_basis(&connection, row_id, year);
+    if let Err(error) = &result {
+        eprintln!("payment_document_basis_load_failed command=get_payment_document_basis member_rowid={row_id} year={year} category=basis_validation error={error}");
+    }
+    result
+}
+
+#[tauri::command]
 fn export_receipt_pdf(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -1827,6 +1844,18 @@ fn list_member_claims(
 }
 
 #[tauri::command]
+fn list_claims(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<claims::ClaimOverview>, String> {
+    authenticated_user(&state)?;
+    let path = working_database_path(&app)?;
+    ensure_current_insurance_year(&path)?;
+    let connection = open_read_only(&path)?;
+    claims::list_all(&connection).map_err(|_| "Pojistné události se nepodařilo načíst.".to_string())
+}
+
+#[tauri::command]
 fn get_member_audit_history(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -1919,6 +1948,29 @@ fn create_claim(
         .map_err(|_| "Vybraný člen nemá platný interní identifikátor.".to_string())?;
     drop(connection);
     claims::create(&path, identifier, active_year, claim, &user)
+}
+
+#[tauri::command]
+fn update_claim(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+    claim: claims::NewClaim,
+) -> Result<(), String> {
+    let user = require_admin(&state)?;
+    let path = working_database_path(&app)?;
+    let active_year = ensure_current_insurance_year(&path)?;
+    let connection = open_read_only(&path)?;
+    let member = current_member_record(&connection, claim.insurance_row_id, active_year)
+        .map_err(|_| "Vybraný pojistný záznam není platný.".to_string())?;
+    let identifier = member
+        .identifier
+        .as_deref()
+        .unwrap_or_default()
+        .parse::<i64>()
+        .map_err(|_| "Vybraný člen nemá platný interní identifikátor.".to_string())?;
+    drop(connection);
+    claims::update(&path, id, identifier, active_year, claim, &user)
 }
 
 #[tauri::command]
@@ -2055,6 +2107,7 @@ pub fn run() {
             delete_member_payment,
             list_receipts,
             create_receipt,
+            get_payment_document_basis,
             export_receipt_pdf,
             open_receipt_pdf,
             send_receipt_email,
@@ -2062,8 +2115,10 @@ pub fn run() {
             audit_payment_order_print,
             open_generated_pdf,
             list_member_claims,
+            list_claims,
             get_member_audit_history,
             create_claim,
+            update_claim,
             create_database_backup,
             select_database_backup,
             restore_database_backup,

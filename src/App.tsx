@@ -39,7 +39,7 @@ import { SETTINGS_MODULES } from "./modules/settings";
 const UPDATE_CHECK_ENABLED_KEY = "pojisteni.updateCheckEnabled";
 const LAST_UPDATE_CHECK_KEY = "pojisteni.lastUpdateCheck";
 
-type Screen = "Vstup" | "Přehled" | "Pojištěnci" | "Seznam" | "Doklady o zaplacení" | "Nová pojistná událost" | "Příkaz k úhradě" | "Archiv" | "Správa záloh" | "Nastavení" | "O programu";
+type Screen = "Vstup" | "Přehled" | "Pojištěnci" | "Seznam" | "Přidat platbu" | "Doklady o zaplacení" | "Pojistné události" | "Přehled pro pojišťovnu" | "Nová pojistná událost" | "Příkaz k úhradě" | "Archiv" | "Správa záloh" | "Nastavení" | "O programu";
 
 type Receipt = {
   id: number; memberRowId: number; memberIdentifier: string; paymentId: number;
@@ -167,6 +167,7 @@ type PaymentSettings = {
 
 type EmailSettings = { server: string; port: number; username: string; senderEmail: string; encryption: string; credentialName: string; passwordConfigured: boolean; password?: string };
 type ReceiptSettings = { automaticCreation: boolean; automaticSending: boolean; emailSubject: string; emailBody: string; policyholder: string; contractNumber: string };
+type PaymentDocumentBasis = { memberRowId: number; memberName: string; registrationNumber: string; organizationCode: string; insuranceYear: number; prescribedPremium: number; paidAmount: number; paymentDates: string[]; contractNumber: string; insuranceStatus: string; lossInsurance: boolean; certificateReady: boolean };
 
 type PaymentOrderDraft = {
   rowId: number;
@@ -204,8 +205,17 @@ type Claim = {
   assessedDamage?: number;
   insuranceBenefit?: number;
   description?: string;
+  phone?: string; employer?: string; occupation?: string; note?: string;
+  additionalInformation?: string; handledBy?: string; reportPosition?: string;
   closedOn?: string;
   status: "Otevřená" | "Uzavřená";
+};
+
+type ClaimOverview = {
+  id: number; memberRowId: number; memberName: string; registrationNumber: string;
+  organizationCode: string; insuranceYear: number; occurredOn?: string; reportedOn?: string;
+  description?: string; assessedDamage?: number; insuranceBenefit?: number;
+  status: "Otevřená" | "Uzavřená"; lastChanged: string;
 };
 
 type MemberPayment = {
@@ -723,12 +733,16 @@ function Shell({ active, user, onNavigate, onLogout, updater, backupBusy, onCrea
     icon: React.ReactNode;
   }> = [
     { screen: "Přehled", label: "Hlavní panel", icon: <LayoutDashboard /> },
-    { screen: "Pojištěnci", label: "Nový pojištěnec", icon: <UserPlus /> },
     { screen: "Seznam", label: "Seznam pojištěnců", icon: <Users /> },
+    { screen: "Přidat platbu", label: "Přidat platbu", icon: <CreditCard /> },
     { screen: "Doklady o zaplacení", label: "Doklady o zaplacení", icon: <FileText /> },
+    { screen: "Příkaz k úhradě", label: "Příkazy k úhradě", icon: <FileText /> },
+    { screen: "Pojistné události", label: "Pojistné události", icon: <TriangleAlert /> },
+    { screen: "Přehled pro pojišťovnu", label: "Přehled pro pojišťovnu", icon: <LayoutDashboard /> },
     { screen: "Archiv", label: "Archiv", icon: <Archive /> },
-    { screen: "Správa záloh", label: "Správa záloh", icon: <FolderArchive /> },
     { screen: "Nastavení", label: "Nastavení", icon: <Settings /> },
+    { screen: "Pojištěnci", label: "Nový pojištěnec", icon: <UserPlus /> },
+    { screen: "Správa záloh", label: "Správa záloh", icon: <FolderArchive /> },
     { screen: "O programu", label: "O programu", icon: <Info /> },
   ];
   return (
@@ -887,10 +901,18 @@ export default function App() {
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [receiptSearch, setReceiptSearch] = useState("");
   const [memberReceipts, setMemberReceipts] = useState<Receipt[]>([]);
+  const [paymentDocumentBasis, setPaymentDocumentBasis] = useState<PaymentDocumentBasis | null>(null);
   const [memberPaymentForm, setMemberPaymentForm] = useState<MemberPaymentForm | null>(null);
   const [claimsLoading, setClaimsLoading] = useState(false);
   const [claimForm, setClaimForm] = useState<ClaimForm | null>(null);
   const [createdClaimId, setCreatedClaimId] = useState<number | null>(null);
+  const [editingClaimId, setEditingClaimId] = useState<number | null>(null);
+  const [agendaSearch, setAgendaSearch] = useState("");
+  const [agendaMembers, setAgendaMembers] = useState<Member[]>([]);
+  const [agendaClaims, setAgendaClaims] = useState<ClaimOverview[]>([]);
+  const [claimYearFilter, setClaimYearFilter] = useState("");
+  const [claimStatusFilter, setClaimStatusFilter] = useState("");
+  const [claimOcFilter, setClaimOcFilter] = useState("");
   const [dashboard, setDashboard] = useState<DashboardInfo | null>(
     preview
       ? {
@@ -1091,6 +1113,7 @@ export default function App() {
   useEffect(() => {
     if (screen === "Správa záloh" && !preview) void loadDatabaseBackups();
     if (screen === "Doklady o zaplacení" && !preview) void loadReceipts(undefined, "");
+    if (screen === "Pojistné události" && !preview) void loadClaimsOverview();
   }, [screen]);
 
   useEffect(() => {
@@ -1186,6 +1209,10 @@ export default function App() {
     setError("");
     setNotice("");
     setSelectedMember(null);
+    setAgendaMembers([]);
+    setAgendaSearch("");
+    setMemberPaymentForm(null);
+    setPaymentDocumentBasis(null);
     if (next !== "Nastavení") {
       setSettingsSection(null);
       setTariffForm(null);
@@ -1203,6 +1230,92 @@ export default function App() {
       return;
     }
     setScreen(next);
+  }
+
+  async function searchAgendaMembers(event?: FormEvent) {
+    event?.preventDefault();
+    setMembersLoading(true);
+    setError("");
+    try {
+      const result = await invoke<MemberPage>("list_members", {
+        search: agendaSearch.trim() || null,
+        page: 1,
+        pageSize: 25,
+        filters: emptyFilters,
+      });
+      setAgendaMembers(result.members);
+    } catch (message) {
+      setError(String(message));
+    } finally {
+      setMembersLoading(false);
+    }
+  }
+
+  async function selectAgendaMember(member: Member, purpose: "payment" | "receipt") {
+    setError("");
+    try {
+      const current = await invoke<Member>("get_current_member", { rowId: member.rowId });
+      setSelectedMember(current);
+      if (purpose === "payment") {
+        setMemberPayments(await invoke<MemberPayment[]>("list_member_payments", { rowId: current.rowId }));
+        newMemberPayment(current);
+      } else {
+        await loadMemberReceiptData(current);
+      }
+    } catch (message) {
+      setError(String(message));
+    }
+  }
+
+  async function loadClaimsOverview() {
+    setClaimsLoading(true);
+    setError("");
+    try {
+      setAgendaClaims(await invoke<ClaimOverview[]>("list_claims"));
+    } catch (message) {
+      setError(String(message));
+    } finally {
+      setClaimsLoading(false);
+    }
+  }
+
+  function openAgendaClaim(member: Member) {
+    setSelectedMember(member);
+    setReturnToMember(false);
+    setCreatedClaimId(null);
+    setEditingClaimId(null);
+    setClaimForm(emptyClaimForm(member.rowId));
+    setScreen("Nová pojistná událost");
+  }
+
+  async function editAgendaClaim(claim: ClaimOverview) {
+    setClaimsLoading(true);
+    setError("");
+    try {
+      const member = await invoke<Member>("get_current_member", { rowId: claim.memberRowId });
+      const claims = await invoke<Claim[]>("list_member_claims", { rowId: claim.memberRowId });
+      const detail = claims.find((item) => item.id === claim.id);
+      if (!detail) throw new Error("Pojistná událost nebyla nalezena.");
+      setSelectedMember(member);
+      setReturnToMember(false);
+      setEditingClaimId(claim.id);
+      setCreatedClaimId(null);
+      setClaimForm({
+        insuranceRowId: member.rowId,
+        phone: detail.phone ?? "", employer: detail.employer ?? "", occupation: detail.occupation ?? "",
+        occurredOn: detail.occurredOn ?? "", reportedOn: detail.reportedOn ?? "",
+        assessedDamage: detail.assessedDamage == null ? "" : String(detail.assessedDamage),
+        insuranceBenefit: detail.insuranceBenefit == null ? "" : String(detail.insuranceBenefit),
+        description: detail.description ?? "", note: detail.note ?? "",
+        additionalInformation: detail.additionalInformation ?? "", closedOn: detail.closedOn ?? "",
+        handledBy: detail.handledBy ?? "", reportPosition: detail.reportPosition ?? "",
+      });
+      setScreen("Nová pojistná událost");
+    } catch (message) {
+      setError(String(message));
+    } finally {
+      setClaimsLoading(false);
+    }
   }
 
   async function selectPaymentMember(rowId: number) {
@@ -1229,16 +1342,18 @@ export default function App() {
   function openClaimForMember(member: Member) {
     setReturnToMember(true);
     setCreatedClaimId(null);
+    setEditingClaimId(null);
     setClaimForm(emptyClaimForm(member.rowId));
     setScreen("Nová pojistná událost");
   }
 
   function returnToMemberDetail() {
-    setScreen("Seznam");
+    setScreen(returnToMember ? "Seznam" : "Pojistné události");
     setReturnToMember(false);
     setClaimForm(null);
     setPaymentDraft(null);
     setCreatedClaimId(null);
+    setEditingClaimId(null);
   }
 
   async function loadMemberClaims(member: Member) {
@@ -1274,12 +1389,27 @@ export default function App() {
     }
   }
 
+  async function loadMemberReceiptData(member: Member) {
+    setError("");
+    try {
+      const [loaded, basis] = await Promise.all([
+        invoke<Receipt[]>("list_receipts", { memberRowId: member.rowId, search: null }),
+        invoke<PaymentDocumentBasis>("get_payment_document_basis", { rowId: member.rowId }),
+      ]);
+      setMemberReceipts(loaded);
+      setPaymentDocumentBasis(basis);
+    } catch {
+      setPaymentDocumentBasis(null);
+      setError("Podklady dokladu se nepodařilo načíst.");
+    }
+  }
+
   async function createMemberReceipt(member: Member) {
     setSaving(true);
     setError("");
     try {
       const id = await invoke<number | null>("create_receipt", { rowId: member.rowId });
-      await loadReceipts(member.rowId, "");
+      await loadMemberReceiptData(member);
       setNotice(id ? "Doklad je připraven." : "Doklad lze vytvořit až po úplné úhradě pojistného.");
     } catch (message) {
       setError(String(message));
@@ -1349,16 +1479,22 @@ export default function App() {
     setClaimsLoading(true);
     setError("");
     try {
-      const id = await invoke<number>("create_claim", {
+      const payload = {
+        ...claimForm,
+        assessedDamage: claimForm.assessedDamage ? Number(claimForm.assessedDamage) : null,
+        insuranceBenefit: claimForm.insuranceBenefit ? Number(claimForm.insuranceBenefit) : null,
+      };
+      const id = editingClaimId ?? await invoke<number>("create_claim", {
         claim: {
-          ...claimForm,
-          assessedDamage: claimForm.assessedDamage ? Number(claimForm.assessedDamage) : null,
-          insuranceBenefit: claimForm.insuranceBenefit ? Number(claimForm.insuranceBenefit) : null,
+          ...payload,
         },
       });
+      if (editingClaimId) await invoke("update_claim", { id: editingClaimId, claim: payload });
       setCreatedClaimId(id);
-      setNotice("Pojistná událost byla vytvořena.");
+      setNotice(editingClaimId ? "Pojistná událost byla upravena." : "Pojistná událost byla vytvořena.");
+      setEditingClaimId(null);
       if (selectedMember) await loadMemberClaims(selectedMember);
+      await loadClaimsOverview();
     } catch (message) {
       setError(String(message));
     } finally {
@@ -1858,11 +1994,93 @@ export default function App() {
     );
   }
 
+  if (screen === "Přidat platbu") {
+    return (
+      <Shell {...shellUpdater} active="Přidat platbu" user={user} onNavigate={navigate} onLogout={leaveToLogin}>
+        <div className="page agenda-page">
+          <header className="page-header"><div><small>Platby</small><h1>Přidat platbu</h1></div></header>
+          {error && <div className="message error">{error}</div>}
+          {notice && <div className="message success">{notice}</div>}
+          <form className="search-bar" onSubmit={searchAgendaMembers}>
+            <Search /><input value={agendaSearch} onChange={(event) => setAgendaSearch(event.target.value)} placeholder="Jméno, evidenční číslo, kód OC nebo rodné číslo" />
+            <button className="primary">Vyhledat člena</button>
+          </form>
+          {agendaMembers.length > 0 && <div className="agenda-member-results"><table><thead><tr><th>Evidenční číslo</th><th>Člen</th><th>Kód OC</th><th>Rok</th><th>Stav úhrady</th><th></th></tr></thead><tbody>
+            {agendaMembers.map((member) => <tr key={member.rowId}><td>{display(member.registrationNumber)}</td><td>{member.insured}</td><td>{display(member.code)}</td><td>{insuranceYear(member)}</td><td>{paymentSummary(member).label}</td><td><button onClick={() => void selectAgendaMember(member, "payment")}>Vybrat</button></td></tr>)}
+          </tbody></table></div>}
+          {selectedMember && <section className="agenda-workspace">
+            <MemberHeading member={selectedMember} />
+            <section className="payment-summary-cards">
+              <div><span>Roční pojistné</span><strong>{displayCurrency(selectedMember.premium)}</strong></div>
+              <div><span>Skutečně uhrazeno</span><strong>{displayCurrency(selectedMember.actualPayment)}</strong></div>
+              <div><span>Zbývá uhradit</span><strong>{displayCurrency(Math.max(Number(selectedMember.premium ?? 0) - Number(selectedMember.actualPayment ?? 0), 0))}</strong></div>
+              <div><span>Stav</span><strong>{paymentSummary(selectedMember).label}</strong></div>
+            </section>
+            {memberPaymentForm && <section className="member-payment-form">
+              <h3>Nová platba</h3>
+              <label>Člen<input value={selectedMember.insured} readOnly /></label>
+              <label>Evidenční číslo<input value={selectedMember.registrationNumber ?? ""} readOnly /></label>
+              <label>Pojistný rok<input value={insuranceYear(selectedMember)} readOnly /></label>
+              <label>Datum úhrady<input type="date" value={memberPaymentForm.receivedOn} onChange={(event) => setMemberPaymentForm({ ...memberPaymentForm, receivedOn: event.target.value })} /></label>
+              <label>Částka (Kč)<input type="number" min="1" value={memberPaymentForm.amount} onChange={(event) => setMemberPaymentForm({ ...memberPaymentForm, amount: event.target.value })} /></label>
+              <label>Způsob úhrady<select value={memberPaymentForm.method} onChange={(event) => setMemberPaymentForm({ ...memberPaymentForm, method: event.target.value as MemberPaymentForm["method"] })}><option>Bankovní převod</option><option>Hotově</option><option>Jiné</option></select></label>
+              <label className="wide">Poznámka<textarea value={memberPaymentForm.note} onChange={(event) => setMemberPaymentForm({ ...memberPaymentForm, note: event.target.value })} /></label>
+              <footer><button className="primary" disabled={saving} onClick={saveMemberPayment}><Save /> Uložit platbu</button></footer>
+            </section>}
+          </section>}
+        </div>
+      </Shell>
+    );
+  }
+
+  if (screen === "Pojistné události") {
+    const query = agendaSearch.trim().toLocaleLowerCase("cs-CZ");
+    const visibleClaims = agendaClaims.filter((claim) =>
+      (!query || `${claim.id} ${claim.memberName} ${claim.registrationNumber} ${claim.description ?? ""}`.toLocaleLowerCase("cs-CZ").includes(query)) &&
+      (!claimYearFilter || String(claim.insuranceYear) === claimYearFilter) &&
+      (!claimStatusFilter || claim.status === claimStatusFilter) &&
+      (!claimOcFilter || claim.organizationCode === claimOcFilter)
+    );
+    return (
+      <Shell {...shellUpdater} active="Pojistné události" user={user} onNavigate={navigate} onLogout={leaveToLogin}>
+        <div className="page agenda-page">
+          <header className="page-header"><div><small>Evidence</small><h1>Pojistné události</h1></div></header>
+          {error && <div className="message error">{error}</div>}
+          {notice && <div className="message success">{notice}</div>}
+          <form className="search-bar" onSubmit={searchAgendaMembers}><Search /><input value={agendaSearch} onChange={(event) => setAgendaSearch(event.target.value)} placeholder="Člen, číslo události nebo popis" /><button className="primary">Vyhledat člena pro novou událost</button></form>
+          {agendaMembers.length > 0 && <div className="agenda-member-results"><table><thead><tr><th>Evidenční číslo</th><th>Člen</th><th>Kód OC</th><th>Rok</th><th></th></tr></thead><tbody>{agendaMembers.map((member) => <tr key={member.rowId}><td>{display(member.registrationNumber)}</td><td>{member.insured}</td><td>{display(member.code)}</td><td>{insuranceYear(member)}</td><td><button className="action-claim" onClick={() => openAgendaClaim(member)}><Plus /> Nová událost</button></td></tr>)}</tbody></table></div>}
+          <div className="agenda-filters">
+            <input value={claimYearFilter} onChange={(event) => setClaimYearFilter(event.target.value.replace(/\D/g, ""))} placeholder="Rok" />
+            <select value={claimStatusFilter} onChange={(event) => setClaimStatusFilter(event.target.value)}><option value="">Stav: vše</option><option>Otevřená</option><option>Uzavřená</option></select>
+            <input value={claimOcFilter} onChange={(event) => setClaimOcFilter(event.target.value)} placeholder="Kód OC" />
+          </div>
+          <div className="claims-table"><table><thead><tr><th>Číslo události</th><th>Člen</th><th>Evidenční číslo</th><th>Kód OC</th><th>Datum vzniku</th><th>Datum nahlášení</th><th>Typ události</th><th>Stav</th><th>Požadovaná částka</th><th>Vyplacená částka</th><th>Poslední změna</th><th>Akce</th></tr></thead><tbody>
+            {visibleClaims.map((claim) => <tr key={claim.id}><td>{claim.id}</td><td>{claim.memberName}</td><td>{claim.registrationNumber}</td><td>{claim.organizationCode}</td><td>{displayDate(claim.occurredOn)}</td><td>{displayDate(claim.reportedOn)}</td><td>{display(claim.description)}</td><td>{claim.status}</td><td>{displayCurrency(claim.assessedDamage)}</td><td>{displayCurrency(claim.insuranceBenefit)}</td><td>{displayDateTime(claim.lastChanged)}</td><td className="row-actions"><button title="Upravit událost" onClick={() => void editAgendaClaim(claim)}><Pencil /></button><button title="Otevřít detail člena" onClick={() => { setScreen("Seznam"); void openMember(claim.memberRowId); }}><Users /></button></td></tr>)}
+            {!claimsLoading && visibleClaims.length === 0 && <tr><td colSpan={12} className="empty-row">Nebyly nalezeny žádné pojistné události.</td></tr>}
+          </tbody></table></div>
+        </div>
+      </Shell>
+    );
+  }
+
+  if (screen === "Přehled pro pojišťovnu") {
+    return (
+      <Shell {...shellUpdater} active="Přehled pro pojišťovnu" user={user} onNavigate={navigate} onLogout={leaveToLogin}>
+        <div className="page">
+          <header className="page-header">
+            <div><small>Pojištění</small><h1>Přehled pro pojišťovnu</h1></div>
+          </header>
+          <div className="message">Modul se připravuje.</div>
+        </div>
+      </Shell>
+    );
+  }
+
   if (screen === "Nová pojistná událost" && selectedMember && claimForm) {
     const updateClaim = <K extends keyof ClaimForm>(key: K, value: ClaimForm[K]) =>
       setClaimForm((current) => current ? { ...current, [key]: value } : current);
     return (
-      <Shell {...shellUpdater} active="Seznam" user={user} onNavigate={navigate} onLogout={leaveToLogin}>
+      <Shell {...shellUpdater} active={returnToMember ? "Seznam" : "Pojistné události"} user={user} onNavigate={navigate} onLogout={leaveToLogin}>
         <div className="page claim-page">
           <header className="page-header">
             <div><small>Pojistné události</small><h1>Nová pojistná událost</h1></div>
@@ -1872,11 +2090,11 @@ export default function App() {
           {createdClaimId ? (
             <section className="claim-created">
               <Check />
-              <h2>Pojistná událost byla vytvořena.</h2>
+              <h2>Pojistná událost byla uložena.</h2>
               <p>Číslo pojistné události: <strong>{createdClaimId}</strong></p>
               <div className="form-actions">
                 <button className="action-claim" onClick={() => { setCreatedClaimId(null); setClaimForm(emptyClaimForm(selectedMember.rowId)); }}>Založit další událost</button>
-                <button className="action-neutral" onClick={returnToMemberDetail}><ArrowLeft /> Zpět na detail člena</button>
+                <button className="action-neutral" onClick={returnToMemberDetail}><ArrowLeft /> {returnToMember ? "Zpět na detail člena" : "Zpět na pojistné události"}</button>
               </div>
             </section>
           ) : (
@@ -1907,7 +2125,7 @@ export default function App() {
                 <label>Poloha v sestavě<input value={claimForm.reportPosition} onChange={(event) => updateClaim("reportPosition", event.target.value)} /></label>
                 <footer className="form-actions wide">
                   <button className="action-claim" disabled={claimsLoading} onClick={saveClaim}><Plus /> Uložit pojistnou událost</button>
-                  <button className="action-neutral" disabled={claimsLoading} onClick={returnToMemberDetail}><ArrowLeft /> Zrušit a vrátit se na člena</button>
+                  <button className="action-neutral" disabled={claimsLoading} onClick={returnToMemberDetail}><ArrowLeft /> {returnToMember ? "Zrušit a vrátit se na člena" : "Zrušit"}</button>
                 </footer>
               </section>
             </>
@@ -2408,6 +2626,31 @@ export default function App() {
           <header className="page-header"><div><small>Dokumenty</small><h1>Doklady o zaplacení</h1></div></header>
           {error && <div className="message error">{error}</div>}
           {notice && <div className="message success">{notice}</div>}
+          <section className="agenda-workspace">
+            <h2>Vytvořit doklad</h2>
+            <form className="search-bar" onSubmit={searchAgendaMembers}>
+              <Search /><input value={agendaSearch} onChange={(event) => setAgendaSearch(event.target.value)} placeholder="Jméno, evidenční číslo, kód OC nebo rodné číslo" />
+              <button className="primary">Vyhledat člena</button>
+            </form>
+            {agendaMembers.length > 0 && <div className="agenda-member-results"><table><thead><tr><th>Evidenční číslo</th><th>Člen</th><th>Kód OC</th><th>Rok</th><th>Uhrazeno</th><th>Stav</th><th></th></tr></thead><tbody>
+              {agendaMembers.map((member) => <tr key={member.rowId}><td>{display(member.registrationNumber)}</td><td>{member.insured}</td><td>{display(member.code)}</td><td>{insuranceYear(member)}</td><td>{displayCurrency(member.actualPayment)}</td><td>{paymentSummary(member).label}</td><td><button onClick={() => void selectAgendaMember(member, "receipt")}>Vybrat</button></td></tr>)}
+            </tbody></table></div>}
+            {selectedMember && <div className="agenda-selected-member">
+              <MemberHeading member={selectedMember} />
+              {paymentDocumentBasis && <section className="payment-summary-cards">
+                <div><span>Pojistný rok</span><strong>{paymentDocumentBasis.insuranceYear}</strong></div>
+                <div><span>Předepsané pojistné</span><strong>{displayCurrency(paymentDocumentBasis.prescribedPremium)}</strong></div>
+                <div><span>Skutečně uhrazeno</span><strong>{displayCurrency(paymentDocumentBasis.paidAmount)}</strong></div>
+                <div><span>Stav</span><strong>{paymentSummary(selectedMember).label}</strong></div>
+              </section>}
+              <button className="primary" disabled={saving || !paymentDocumentBasis} onClick={() => void createMemberReceipt(selectedMember)}><Plus /> Vytvořit doklad</button>
+              <div className="claims-table"><table><thead><tr><th>Datum vystavení</th><th>Datum úhrady</th><th>Rok</th><th>Částka</th><th>Stav</th><th>Akce</th></tr></thead><tbody>
+                {memberReceipts.map((receipt) => <tr key={receipt.id}><td>{displayDate(receipt.issuedOn)}</td><td>{displayDate(receipt.paidOn)}</td><td>{receipt.insuranceYear}</td><td>{displayCurrency(receipt.amount)}</td><td>{receipt.status}</td><td className="row-actions"><button title="Náhled" onClick={() => void receiptAction("open_receipt_pdf", receipt)}><FileText /></button><button title="Tisk" onClick={() => void receiptAction("open_receipt_pdf", receipt, true)}><Printer /></button><button title="Export PDF" onClick={() => void receiptAction("export_receipt_pdf", receipt)}><Upload /></button></td></tr>)}
+                {memberReceipts.length === 0 && <tr><td colSpan={6} className="empty-row">Člen zatím nemá vystavený doklad.</td></tr>}
+              </tbody></table></div>
+            </div>}
+          </section>
+          <h2>Vystavené doklady</h2>
           <form className="search-bar" onSubmit={(event) => { event.preventDefault(); void loadReceipts(undefined, receiptSearch); }}>
             <Search /><input value={receiptSearch} onChange={(event) => setReceiptSearch(event.target.value)} placeholder="Jméno, evidenční číslo, rok nebo e-mail" />
             <button className="primary">Vyhledat</button>
@@ -2514,7 +2757,7 @@ export default function App() {
                       setDetailTab(id);
                       setHistoryMember(null);
                       if (id === "claims") void loadMemberClaims(selectedMember);
-                      if (id === "receipts") void loadReceipts(selectedMember.rowId, "");
+                      if (id === "receipts") void loadMemberReceiptData(selectedMember);
                     }}
                   >
                     {label}
@@ -2589,6 +2832,12 @@ export default function App() {
               {detailTab === "receipts" && (
                 <div className="member-payments-section">
                   <header className="member-payments-header"><h2>Doklady o zaplacení</h2><button className="primary" disabled={saving} onClick={() => void createMemberReceipt(selectedMember)}><Plus /> Vytvořit nový doklad</button></header>
+                  {paymentDocumentBasis && <section className="payment-summary-cards">
+                    <div><span>Pojistný rok</span><strong>{paymentDocumentBasis.insuranceYear}</strong></div>
+                    <div><span>Předepsané pojistné</span><strong>{displayCurrency(paymentDocumentBasis.prescribedPremium)}</strong></div>
+                    <div><span>Skutečně uhrazeno</span><strong>{displayCurrency(paymentDocumentBasis.paidAmount)}</strong></div>
+                    <div><span>Číslo smlouvy</span><strong>{paymentDocumentBasis.contractNumber}</strong></div>
+                  </section>}
                   <div className="claims-table"><table>
                     <thead><tr><th>Datum vystavení</th><th>Datum úhrady</th><th>Rok</th><th>Částka</th><th>Číslo smlouvy</th><th>Stav</th><th>Odeslání</th><th>E-mail</th><th>Akce</th></tr></thead>
                     <tbody>{memberReceipts.map((receipt) => <tr key={receipt.id}>

@@ -45,6 +45,23 @@ pub struct ReceiptSettings {
     pub contract_number: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaymentDocumentBasis {
+    pub member_row_id: i64,
+    pub member_name: String,
+    pub registration_number: String,
+    pub organization_code: String,
+    pub insurance_year: i32,
+    pub prescribed_premium: i64,
+    pub paid_amount: i64,
+    pub payment_dates: Vec<String>,
+    pub contract_number: String,
+    pub insurance_status: String,
+    pub loss_insurance: bool,
+    pub certificate_ready: bool,
+}
+
 #[derive(Debug)]
 struct Snapshot {
     identifier: String,
@@ -68,6 +85,8 @@ struct Snapshot {
     paid: i64,
     paid_on: String,
     email: String,
+    loss_insurance: bool,
+    termination: String,
 }
 
 pub fn ensure_schema(connection: &Connection) -> rusqlite::Result<()> {
@@ -142,11 +161,12 @@ fn snapshot(connection: &Connection, row_id: i64, year: i32) -> Result<Snapshot,
           COALESCE("RodnéČíslo",''),COALESCE(CAST("EvČíslo" AS TEXT),''),COALESCE("ZO",''),COALESCE("Adresa",''),
           COALESCE("Město",''),COALESCE("PSČ",''),COALESCE("Stát",'Česká republika'),COALESCE("Kategorie",''),
           COALESCE("PojištěníOd",''),COALESCE("PojištěníDo",''),COALESCE("RočPojistné",0),COALESCE("PojistnáČástka",0),
-          COALESCE("SkutÚhrada",0),COALESCE("e-mail",''),COALESCE(CAST("KódOC" AS TEXT),''),
+          COALESCE((SELECT SUM("Castka") FROM "PlatbyClenu" WHERE "PojistnyZaznamRowId"=Seznam.rowid),COALESCE("SkutÚhrada",0)),
+          COALESCE("e-mail",''),COALESCE(CAST("KódOC" AS TEXT),''),COALESCE("Ztráta",0),COALESCE("Ukončení",''),
           COALESCE((SELECT "Id" FROM "PlatbyClenu" WHERE "PojistnyZaznamRowId"=Seznam.rowid ORDER BY "DatumPrijeti" DESC,"Id" DESC LIMIT 1),0),
           COALESCE((SELECT "DatumPrijeti" FROM "PlatbyClenu" WHERE "PojistnyZaznamRowId"=Seznam.rowid ORDER BY "DatumPrijeti" DESC,"Id" DESC LIMIT 1),'')
           FROM "Seznam" WHERE rowid=?1 AND substr(CAST("PojištěníOd" AS TEXT),1,4)=CAST(?2 AS TEXT)"#,
-        params![row_id,year], |row| Ok(Snapshot { identifier:row.get(0)?, title:row.get(1)?, first_name:row.get(2)?, last_name:row.get(3)?, personal_id:row.get(4)?, registration:row.get(5)?, organization:row.get(6)?, address:row.get(7)?, city:row.get(8)?, postal_code:row.get(9)?, country:row.get(10)?, category:row.get(11)?, insurance_from:row.get(12)?, insurance_to:row.get(13)?, insured_amount:row.get(14)?, premium:row.get(15)?, paid:row.get(16)?, email:row.get(17)?, organization_code:row.get(18)?, payment_id:row.get(19)?, paid_on:row.get(20)? })
+        params![row_id,year], |row| Ok(Snapshot { identifier:row.get(0)?, title:row.get(1)?, first_name:row.get(2)?, last_name:row.get(3)?, personal_id:row.get(4)?, registration:row.get(5)?, organization:row.get(6)?, address:row.get(7)?, city:row.get(8)?, postal_code:row.get(9)?, country:row.get(10)?, category:row.get(11)?, insurance_from:row.get(12)?, insurance_to:row.get(13)?, insured_amount:row.get(14)?, premium:row.get(15)?, paid:row.get(16)?, email:row.get(17)?, organization_code:row.get(18)?, loss_insurance:row.get::<_,i64>(19)? != 0, termination:row.get(20)?, payment_id:row.get(21)?, paid_on:row.get(22)? })
     );
     match result {
         Ok(snapshot) => Ok(snapshot),
@@ -154,10 +174,58 @@ fn snapshot(connection: &Connection, row_id: i64, year: i32) -> Result<Snapshot,
             "Pro otevřeného člena nebylo nalezeno pojištění pro rok {year}."
         )),
         Err(error) => {
-            eprintln!("receipt snapshot query failed: {error}");
+            eprintln!("payment_document_basis_load_failed command=get_payment_document_basis member_rowid={row_id} year={year} category=database_query database_error={error}");
             Err("Podklady dokladu se nepodařilo načíst.".to_string())
         }
     }
+}
+
+pub fn load_basis(
+    connection: &Connection,
+    row_id: i64,
+    year: i32,
+) -> Result<PaymentDocumentBasis, String> {
+    let data = snapshot(connection, row_id, year)?;
+    validate_required(&data)?;
+    let settings = load_settings(connection)?;
+    if settings.contract_number.trim().is_empty() {
+        return Err("Doklad nelze vystavit: chybí číslo pojistné smlouvy.".into());
+    }
+    let mut statement = connection.prepare(
+        r#"SELECT "DatumPrijeti" FROM "PlatbyClenu"
+           WHERE "PojistnyZaznamRowId"=?1 ORDER BY "DatumPrijeti", "Id""#,
+    ).map_err(|error| {
+        eprintln!("payment_document_basis_load_failed command=get_payment_document_basis member_rowid={row_id} year={year} category=payment_query database_error={error}");
+        "Podklady dokladu se nepodařilo načíst.".to_string()
+    })?;
+    let payment_dates = statement.query_map([row_id], |row| row.get(0))
+        .and_then(|rows| rows.collect::<rusqlite::Result<Vec<String>>>())
+        .map_err(|error| {
+            eprintln!("payment_document_basis_load_failed command=get_payment_document_basis member_rowid={row_id} year={year} category=payment_mapping database_error={error}");
+            "Podklady dokladu se nepodařilo načíst.".to_string()
+        })?;
+    let member_name = format!("{} {} {}", data.title, data.first_name, data.last_name)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    Ok(PaymentDocumentBasis {
+        member_row_id: row_id,
+        member_name,
+        registration_number: data.registration,
+        organization_code: data.organization_code,
+        insurance_year: year,
+        prescribed_premium: data.premium,
+        paid_amount: data.paid,
+        payment_dates,
+        contract_number: settings.contract_number,
+        insurance_status: if data.termination.trim().is_empty() {
+            "Aktivní".into()
+        } else {
+            "Ukončené".into()
+        },
+        loss_insurance: data.loss_insurance,
+        certificate_ready: data.paid >= data.premium,
+    })
 }
 
 fn validate_required(snapshot: &Snapshot) -> Result<(), String> {
@@ -496,24 +564,33 @@ mod tests {
                 "Město" TEXT, "PSČ" TEXT, "Stát" TEXT, "Kategorie" TEXT,
                 "PojištěníOd" TEXT, "PojištěníDo" TEXT, "PojistnáČástka" INTEGER,
                 "RočPojistné" INTEGER, "SkutÚhrada" INTEGER, "e-mail" TEXT, "KódOC" TEXT
+                , "Ztráta" INTEGER, "Ukončení" TEXT
             );
             CREATE TABLE "PlatbyClenu" (
                 "Id" INTEGER PRIMARY KEY AUTOINCREMENT,
                 "PojistnyZaznamRowId" INTEGER NOT NULL,
-                "DatumPrijeti" TEXT NOT NULL
+                "DatumPrijeti" TEXT NOT NULL,
+                "Castka" INTEGER NOT NULL
             );"#,
             )
             .unwrap();
         connection.execute(
             r#"INSERT INTO "Seznam" VALUES
                ('member-1','Ing.',?1,'Novák','780101/1234',53,'FVČ',?2,'Praha','110 00','Česká republika','B',
-                '2026-01-01 00:00:00','2026-12-31 00:00:00',781,320000,781,?3,'2')"#,
+                '2026-01-01 00:00:00','2026-12-31 00:00:00',781,320000,781,?3,'2',-1,NULL)"#,
             params![first_name,address,email],
         ).unwrap();
-        let row_id = connection.last_insert_rowid();
+        let inserted_row_id = connection.last_insert_rowid();
+        let row_id = 42;
+        connection
+            .execute(
+                "UPDATE \"Seznam\" SET rowid=?1 WHERE rowid=?2",
+                params![row_id, inserted_row_id],
+            )
+            .unwrap();
         if include_payment {
             connection.execute(
-                r#"INSERT INTO "PlatbyClenu"("PojistnyZaznamRowId","DatumPrijeti") VALUES(?1,'2026-07-31')"#,
+                r#"INSERT INTO "PlatbyClenu"("PojistnyZaznamRowId","DatumPrijeti","Castka") VALUES(?1,'2026-07-31',781)"#,
                 [row_id],
             ).unwrap();
         }
@@ -580,6 +657,8 @@ mod tests {
             paid: 781,
             paid_on: "2026-07-31".into(),
             email: "test@example.invalid".into(),
+            loss_insurance: true,
+            termination: String::new(),
         };
         let pdf = create_pdf(&snapshot, &path).unwrap();
         assert!(pdf.starts_with(b"%PDF"));
@@ -679,5 +758,113 @@ mod tests {
         assert!(snapshot(&connection, row_id, 2025)
             .unwrap_err()
             .contains("rok 2025"));
+    }
+
+    #[test]
+    fn basis_uses_rowid_not_registration_number() {
+        let (_directory, database, row_id) = receipt_database(
+            Some("jan@example.invalid"),
+            Some("Testovací 1"),
+            Some("Jan"),
+            true,
+        );
+        assert_eq!(row_id, 42);
+        let connection = Connection::open(database).unwrap();
+        let basis = load_basis(&connection, row_id, 2026).unwrap();
+        assert_eq!(basis.member_row_id, 42);
+        assert_eq!(basis.registration_number, "53");
+        assert_eq!(basis.prescribed_premium, 781);
+        assert_eq!(basis.paid_amount, 781);
+        assert!(basis.certificate_ready && basis.loss_insurance);
+    }
+
+    #[test]
+    fn transferred_payment_without_payment_rows_uses_stored_total() {
+        let (_directory, database, row_id) = receipt_database(None, None, Some("Jan"), false);
+        let connection = Connection::open(database).unwrap();
+        let basis = load_basis(&connection, row_id, 2026).unwrap();
+        assert_eq!(basis.paid_amount, 781);
+        assert!(basis.payment_dates.is_empty());
+        assert!(basis.certificate_ready);
+    }
+
+    #[test]
+    fn multiple_payments_are_summed_from_payment_module() {
+        let (_directory, database, row_id) = receipt_database(None, None, Some("Jan"), false);
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute(
+                r#"UPDATE "Seznam" SET "SkutÚhrada"=0 WHERE rowid=?1"#,
+                [row_id],
+            )
+            .unwrap();
+        connection.execute(r#"INSERT INTO "PlatbyClenu"("PojistnyZaznamRowId","DatumPrijeti","Castka") VALUES(?1,'2026-03-01',400),(?1,'2026-04-01',381)"#,[row_id]).unwrap();
+        let basis = load_basis(&connection, row_id, 2026).unwrap();
+        assert_eq!(basis.paid_amount, 781);
+        assert_eq!(basis.payment_dates, vec!["2026-03-01", "2026-04-01"]);
+        assert!(basis.certificate_ready);
+    }
+
+    #[test]
+    fn zero_payment_loads_basis_but_is_not_ready() {
+        let (_directory, database, row_id) = receipt_database(None, None, Some("Jan"), false);
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute(
+                r#"UPDATE "Seznam" SET "SkutÚhrada"=0 WHERE rowid=?1"#,
+                [row_id],
+            )
+            .unwrap();
+        let basis = load_basis(&connection, row_id, 2026).unwrap();
+        assert_eq!(basis.paid_amount, 0);
+        assert!(!basis.certificate_ready);
+    }
+
+    #[test]
+    fn missing_contract_number_is_reported() {
+        let (_directory, database, row_id) = receipt_database(None, None, Some("Jan"), false);
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute(
+                r#"UPDATE "NastaveniDokladu" SET "CisloSmlouvy"='' WHERE "Id"=1"#,
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            load_basis(&connection, row_id, 2026).unwrap_err(),
+            "Doklad nelze vystavit: chybí číslo pojistné smlouvy."
+        );
+    }
+
+    #[test]
+    fn nonexistent_member_returns_safe_error() {
+        let (_directory, database, _) = receipt_database(None, None, Some("Jan"), false);
+        let connection = Connection::open(database).unwrap();
+        assert!(load_basis(&connection, 999, 2026)
+            .unwrap_err()
+            .contains("rok 2026"));
+    }
+
+    #[test]
+    fn kostal_ales_current_basis_loads_for_registration_one() {
+        let (_directory, database, row_id) = receipt_database(
+            Some("ales@example.invalid"),
+            Some("Testovací 1"),
+            Some("Aleš"),
+            true,
+        );
+        let connection = Connection::open(&database).unwrap();
+        connection.execute(r#"UPDATE "Seznam" SET "Příjmení"='Košťál',"EvČíslo"=1,"PojistnáČástka"=653,"SkutÚhrada"=653 WHERE rowid=?1"#,[row_id]).unwrap();
+        connection
+            .execute(
+                r#"UPDATE "PlatbyClenu" SET "Castka"=653 WHERE "PojistnyZaznamRowId"=?1"#,
+                [row_id],
+            )
+            .unwrap();
+        let basis = load_basis(&connection, row_id, 2026).unwrap();
+        assert_eq!(basis.member_name, "Ing. Aleš Košťál");
+        assert_eq!(basis.registration_number, "1");
+        assert_eq!((basis.prescribed_premium, basis.paid_amount), (653, 653));
+        assert!(basis.certificate_ready);
     }
 }

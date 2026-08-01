@@ -25,6 +25,24 @@ pub struct Claim {
     pub status: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaimOverview {
+    pub id: i64,
+    pub member_row_id: i64,
+    pub member_name: String,
+    pub registration_number: String,
+    pub organization_code: String,
+    pub insurance_year: i32,
+    pub occurred_on: Option<String>,
+    pub reported_on: Option<String>,
+    pub description: Option<String>,
+    pub assessed_damage: Option<f64>,
+    pub insurance_benefit: Option<f64>,
+    pub status: String,
+    pub last_changed: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewClaim {
@@ -120,6 +138,46 @@ pub fn list_for_member(connection: &Connection, identifier: i64) -> rusqlite::Re
     claims
 }
 
+pub fn list_all(connection: &Connection) -> rusqlite::Result<Vec<ClaimOverview>> {
+    let mut statement = connection.prepare(
+        r#"SELECT claim."ID", member.rowid,
+                  TRIM(COALESCE(member."Titul", '') || ' ' || COALESCE(member."Příjmení", '') || ' ' || COALESCE(member."Jméno", '')),
+                  COALESCE(CAST(member."EvČíslo" AS TEXT), ''),
+                  COALESCE(CAST(member."KódOC" AS TEXT), ''),
+                  claim."PojistnyRok", claim."VznikPU", claim."OznameniPU",
+                  claim."PopisUdalosti", claim."ZjistenaSkoda", claim."PojistnePlneni",
+                  claim."Ukonceno", claim."Vytvoreno"
+           FROM "PojistneUdalosti" claim
+           JOIN "Seznam" member ON member.rowid = claim."PojistnyZaznamRowId"
+           ORDER BY COALESCE(claim."VznikPU", claim."Vytvoreno") DESC, claim."ID" DESC"#,
+    )?;
+    let claims = statement
+        .query_map([], |row| {
+            let closed_on: Option<String> = row.get(11)?;
+            Ok(ClaimOverview {
+                id: row.get(0)?,
+                member_row_id: row.get(1)?,
+                member_name: row.get(2)?,
+                registration_number: row.get(3)?,
+                organization_code: row.get(4)?,
+                insurance_year: row.get(5)?,
+                occurred_on: row.get(6)?,
+                reported_on: row.get(7)?,
+                description: row.get(8)?,
+                assessed_damage: row.get(9)?,
+                insurance_benefit: row.get(10)?,
+                status: if closed_on.as_deref().unwrap_or("").trim().is_empty() {
+                    "Otevřená".into()
+                } else {
+                    "Uzavřená".into()
+                },
+                last_changed: row.get(12)?,
+            })
+        })?
+        .collect();
+    claims
+}
+
 pub fn create(
     database_path: &Path,
     member_identifier: i64,
@@ -200,6 +258,69 @@ pub fn create(
         .commit()
         .map_err(|_| "Pojistnou událost se nepodařilo uložit.".to_string())?;
     Ok(next_id)
+}
+
+pub fn update(
+    database_path: &Path,
+    id: i64,
+    member_identifier: i64,
+    insurance_year: i32,
+    input: NewClaim,
+    user: &str,
+) -> Result<(), String> {
+    if clean(input.occurred_on.clone()).is_none() {
+        return Err("Vyplňte datum vzniku pojistné události.".into());
+    }
+    if clean(input.description.clone()).is_none() {
+        return Err("Vyplňte popis pojistné události.".into());
+    }
+    let mut connection = Connection::open(database_path)
+        .map_err(|_| "Pojistnou událost se nepodařilo upravit.".to_string())?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|_| "Pojistnou událost se nepodařilo upravit.".to_string())?;
+    let changed = transaction
+        .execute(
+            r#"UPDATE "PojistneUdalosti" SET
+                "Telefon"=?1, "Zamestnavatel"=?2, "Povolani"=?3, "VznikPU"=?4,
+                "OznameniPU"=?5, "ZjistenaSkoda"=?6, "PojistnePlneni"=?7,
+                "PopisUdalosti"=?8, "Poznamka1"=?9, "Poznamka2"=?10,
+                "Ukonceno"=?11, "ResiPojistovna"=?12, "PolohaVSestave"=?13
+               WHERE "ID"=?14 AND "IdentifikatorClena"=?15 AND "PojistnyRok"=?16"#,
+            params![
+                clean(input.phone),
+                clean(input.employer),
+                clean(input.occupation),
+                clean(input.occurred_on),
+                clean(input.reported_on),
+                input.assessed_damage,
+                input.insurance_benefit,
+                clean(input.description),
+                clean(input.note),
+                clean(input.additional_information),
+                clean(input.closed_on),
+                clean(input.handled_by),
+                clean(input.report_position),
+                id,
+                member_identifier,
+                insurance_year,
+            ],
+        )
+        .map_err(|_| "Pojistnou událost se nepodařilo upravit.".to_string())?;
+    if changed != 1 {
+        return Err("Pojistná událost nebyla nalezena.".into());
+    }
+    transaction
+        .execute(
+            r#"INSERT INTO "AuditLog"
+               ("DatumČas", "Uživatel", "Operace", "IdentifikátorPojištěnce", "Výsledek")
+               VALUES (CURRENT_TIMESTAMP, ?1, 'UPDATE_CLAIM', ?2, 'OK')"#,
+            params![user, member_identifier.to_string()],
+        )
+        .map_err(|_| "Pojistnou událost se nepodařilo upravit.".to_string())?;
+    transaction
+        .commit()
+        .map_err(|_| "Pojistnou událost se nepodařilo upravit.".to_string())
 }
 
 #[cfg(test)]

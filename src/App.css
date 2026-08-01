@@ -1416,6 +1416,24 @@ button svg {
   background: #fff;
 }
 
+.agenda-page { display: grid; gap: 18px; }
+.agenda-workspace,
+.agenda-selected-member {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+  border: 1px solid #d9e2ee;
+  border-radius: 10px;
+  background: var(--surface, #fff);
+}
+.agenda-member-results { overflow-x: auto; }
+.agenda-member-results table { width: 100%; border-collapse: collapse; }
+.agenda-member-results th,
+.agenda-member-results td { padding: 10px; border-bottom: 1px solid #d9e2ee; text-align: left; }
+.agenda-filters { display: flex; flex-wrap: wrap; gap: 10px; }
+.agenda-filters input,
+.agenda-filters select { min-width: 150px; }
+
 .claim-member-summary > div {
   display: grid;
   gap: 5px;
