@@ -141,7 +141,7 @@ fn snapshot(connection: &Connection, row_id: i64, year: i32) -> Result<Snapshot,
         r#"SELECT COALESCE("Identifikátor",''),COALESCE("Titul",''),COALESCE("Jméno",''),COALESCE("Příjmení",''),
           COALESCE("RodnéČíslo",''),COALESCE(CAST("EvČíslo" AS TEXT),''),COALESCE("ZO",''),COALESCE("Adresa",''),
           COALESCE("Město",''),COALESCE("PSČ",''),COALESCE("Stát",'Česká republika'),COALESCE("Kategorie",''),
-          COALESCE("PojištěníOd",''),COALESCE("PojištěníDo",''),COALESCE("PojistnáČástka",0),COALESCE("RočPojistné",0),
+          COALESCE("PojištěníOd",''),COALESCE("PojištěníDo",''),COALESCE("RočPojistné",0),COALESCE("PojistnáČástka",0),
           COALESCE("SkutÚhrada",0),COALESCE("e-mail",''),COALESCE(CAST("KódOC" AS TEXT),''),
           COALESCE((SELECT "Id" FROM "PlatbyClenu" WHERE "PojistnyZaznamRowId"=Seznam.rowid ORDER BY "DatumPrijeti" DESC,"Id" DESC LIMIT 1),0),
           COALESCE((SELECT "DatumPrijeti" FROM "PlatbyClenu" WHERE "PojistnyZaznamRowId"=Seznam.rowid ORDER BY "DatumPrijeti" DESC,"Id" DESC LIMIT 1),'')
@@ -507,7 +507,7 @@ mod tests {
         connection.execute(
             r#"INSERT INTO "Seznam" VALUES
                ('member-1','Ing.',?1,'Novák','780101/1234',53,'FVČ',?2,'Praha','110 00','Česká republika','B',
-                '2026-01-01 00:00:00','2026-12-31 00:00:00',320000,781,781,?3,'2')"#,
+                '2026-01-01 00:00:00','2026-12-31 00:00:00',781,320000,781,?3,'2')"#,
             params![first_name,address,email],
         ).unwrap();
         let row_id = connection.last_insert_rowid();

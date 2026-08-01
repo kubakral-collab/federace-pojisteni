@@ -1,6 +1,6 @@
 [package]
 name = "pojisteni-klienti"
-version = "0.19.0"
+version = "0.20.0"
 description = "Pojištění — funkční parita původní Access aplikace"
 authors = ["Federace pojištění"]
 edition = "2021"
