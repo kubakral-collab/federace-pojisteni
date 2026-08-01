@@ -70,6 +70,59 @@ pub fn ensure_schema(connection: &Connection) -> rusqlite::Result<()> {
     )
 }
 
+pub fn ensure_order_schema(connection: &Connection) -> rusqlite::Result<()> {
+    connection.execute_batch(
+        r#"CREATE TABLE IF NOT EXISTS "PrikazyKUhrade" (
+            "Id" INTEGER PRIMARY KEY AUTOINCREMENT,
+            "IdentifikatorClena" TEXT NOT NULL,
+            "PojistnyZaznamRowId" INTEGER NOT NULL,
+            "PojistnyRok" INTEGER NOT NULL,
+            "DatumSplatnosti" TEXT NOT NULL,
+            "CastkaKUhrade" INTEGER NOT NULL,
+            "DatumVystaveni" TEXT NOT NULL,
+            "Stav" TEXT NOT NULL DEFAULT 'VYSTAVEN',
+            "Aktualizovano" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE("IdentifikatorClena", "PojistnyRok")
+        );
+        CREATE INDEX IF NOT EXISTS "IX_PrikazyKUhrade_RokSplatnost"
+            ON "PrikazyKUhrade"("PojistnyRok", "DatumSplatnosti");"#,
+    )
+}
+
+pub fn record_order(
+    connection: &Connection,
+    member_identifier: &str,
+    insurance_row_id: i64,
+    insurance_year: i32,
+    due_date: &str,
+    amount_due: i64,
+    issued_on: &str,
+) -> Result<(), String> {
+    ensure_order_schema(connection)
+        .map_err(|_| "Příkaz k úhradě se nepodařilo zaznamenat.".to_string())?;
+    connection.execute(
+        r#"INSERT INTO "PrikazyKUhrade"
+           ("IdentifikatorClena", "PojistnyZaznamRowId", "PojistnyRok", "DatumSplatnosti", "CastkaKUhrade", "DatumVystaveni", "Stav")
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'VYSTAVEN')
+           ON CONFLICT("IdentifikatorClena", "PojistnyRok") DO UPDATE SET
+             "PojistnyZaznamRowId"=excluded."PojistnyZaznamRowId",
+             "DatumSplatnosti"=excluded."DatumSplatnosti",
+             "CastkaKUhrade"=excluded."CastkaKUhrade",
+             "DatumVystaveni"=excluded."DatumVystaveni",
+             "Stav"='VYSTAVEN',
+             "Aktualizovano"=CURRENT_TIMESTAMP"#,
+        params![
+            member_identifier,
+            insurance_row_id,
+            insurance_year,
+            due_date,
+            amount_due.max(0),
+            issued_on
+        ],
+    ).map_err(|_| "Příkaz k úhradě se nepodařilo zaznamenat.".to_string())?;
+    Ok(())
+}
+
 pub fn load_settings(connection: &Connection) -> rusqlite::Result<PaymentSettings> {
     connection.query_row(
         r#"SELECT "NazevPrijemce", "CisloUctu", "KodBanky", "IBAN", "BIC",
@@ -352,5 +405,36 @@ mod tests {
                 "OK".into()
             )
         );
+    }
+
+    #[test]
+    fn payment_order_is_unique_for_member_and_year() {
+        let connection = Connection::open_in_memory().unwrap();
+        record_order(
+            &connection,
+            "member-1",
+            10,
+            2026,
+            "2026-08-10",
+            500,
+            "2026-07-20",
+        )
+        .unwrap();
+        record_order(
+            &connection,
+            "member-1",
+            10,
+            2026,
+            "2026-08-15",
+            300,
+            "2026-07-25",
+        )
+        .unwrap();
+        let stored: (i64, String, i64) = connection.query_row(
+            r#"SELECT COUNT(*), MAX("DatumSplatnosti"), MAX("CastkaKUhrade") FROM "PrikazyKUhrade""#,
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).unwrap();
+        assert_eq!(stored, (1, "2026-08-15".into(), 300));
     }
 }

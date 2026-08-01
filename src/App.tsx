@@ -118,6 +118,9 @@ type DashboardInfo = {
   commitSha: string;
   buildDate: string;
   gitTag: string;
+  overdueCount: number;
+  overdueAmount: number;
+  oldestDueDate?: string;
 };
 
 type MemberFilters = {
@@ -128,6 +131,7 @@ type MemberFilters = {
   premium: string;
   payment: string;
   paymentStatus: string;
+  overdue: string;
 };
 
 type ArchiveYear = {
@@ -320,6 +324,7 @@ const emptyFilters: MemberFilters = {
   premium: "",
   payment: "",
   paymentStatus: "",
+  overdue: "",
 };
 const preview = import.meta.env.DEV
   ? new URLSearchParams(window.location.search).get("preview")
@@ -681,6 +686,10 @@ function FilterBar({
         <option value="uhrazeno">Uhrazeno</option>
         <option value="neuhrazeno">Neuhrazeno</option>
       </select>
+      <select value={filters.overdue} onChange={(event) => updateFilter("overdue", event.target.value)} aria-label="Filtr splatnosti">
+        <option value="">Splatnost: vše</option>
+        <option value="po_splatnosti">Po splatnosti</option>
+      </select>
       <button type="button" onClick={onApply}>Použít filtry</button>
       <button type="button" onClick={() => { onChange(emptyFilters); }}>Vymazat</button>
     </div>
@@ -893,6 +902,9 @@ export default function App() {
           commitSha: "preview",
           buildDate: "2026-07-28T00:00:00Z",
           gitTag: "v0.17.0",
+          overdueCount: 8,
+          overdueAmount: 4_752,
+          oldestDueDate: "2026-06-15",
         }
       : null,
   );
@@ -1305,6 +1317,7 @@ export default function App() {
       await invoke("save_member_payment", { payment: { ...memberPaymentForm, amount: Number(memberPaymentForm.amount), note: optional(memberPaymentForm.note) } });
       await reloadMemberPayments(selectedMember.rowId);
       await loadReceipts(selectedMember.rowId, "");
+      setDashboard(await invoke<DashboardInfo>("get_dashboard"));
       setMemberPaymentForm(null);
       setNotice(memberPaymentForm.id ? "Platba byla upravena." : "Platba byla přidána.");
     } catch (message) {
@@ -1321,6 +1334,7 @@ export default function App() {
     try {
       await invoke("delete_member_payment", { rowId: selectedMember.rowId, paymentId: payment.id });
       await reloadMemberPayments(selectedMember.rowId);
+      setDashboard(await invoke<DashboardInfo>("get_dashboard"));
       setMemberPaymentForm(null);
       setNotice("Platba byla odstraněna.");
     } catch (message) {
@@ -1493,7 +1507,7 @@ export default function App() {
     setScreen("Pojištěnci");
   }
 
-  async function loadMembers(page = 1, search = activeSearch) {
+  async function loadMembers(page = 1, search = activeSearch, filters = memberFilters) {
     setMembersLoading(true);
     setError("");
     try {
@@ -1501,7 +1515,7 @@ export default function App() {
         search: search || null,
         page,
         pageSize: 50,
-        filters: memberFilters,
+        filters,
       });
       setMemberPage(result);
     } catch (message) {
@@ -1518,7 +1532,18 @@ export default function App() {
     setActiveSearch("");
     setMemberFilters(emptyFilters);
     setScreen("Seznam");
-    await loadMembers(1, "");
+    await loadMembers(1, "", emptyFilters);
+  }
+
+  async function openOverdueMembers() {
+    const filters = { ...emptyFilters, overdue: "po_splatnosti" };
+    setError("");
+    setNotice("");
+    setMemberSearch("");
+    setActiveSearch("");
+    setMemberFilters(filters);
+    setScreen("Seznam");
+    await loadMembers(1, "", filters);
   }
 
   async function searchMembers(event: FormEvent) {
@@ -1820,6 +1845,13 @@ export default function App() {
             <article><Save /><small>Poslední evidenční číslo</small><strong>{dashboard?.lastRegistrationNumber ?? "—"}</strong></article>
             <article><Database /><small>Datum databáze</small><strong>{displayDate(dashboard?.databaseDate)}</strong></article>
             <article><Info /><small>Verze programu</small><strong>{dashboard?.programVersion ?? "—"}</strong></article>
+            <article className="dashboard-card-action" role="button" tabIndex={0} onClick={() => void openOverdueMembers()} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") void openOverdueMembers(); }}>
+              <TriangleAlert />
+              <small>Pojistky po splatnosti</small>
+              <strong>{dashboard ? new Intl.NumberFormat("cs-CZ").format(dashboard.overdueCount) : "—"}</strong>
+              <span>Neuhrazeno: {dashboard ? displayCurrency(dashboard.overdueAmount) : "—"}</span>
+              <span>Nejstarší splatnost: {displayDate(dashboard?.oldestDueDate)}</span>
+            </article>
           </section>
         </div>
       </Shell>

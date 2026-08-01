@@ -166,6 +166,7 @@ struct MemberFilters {
     premium: Option<String>,
     payment: Option<String>,
     payment_status: Option<String>,
+    overdue: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -187,6 +188,9 @@ struct DashboardInfo {
     commit_sha: &'static str,
     build_date: &'static str,
     git_tag: &'static str,
+    overdue_count: i64,
+    overdue_amount: i64,
+    oldest_due_date: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -265,7 +269,15 @@ AND (?8 = '' OR COALESCE(CAST("PojistnáČástka" AS TEXT), '') = ?8)
 AND (?9 = '' OR COALESCE(CAST("SkutÚhrada" AS TEXT), '') = ?9)
 AND (?10 = '' OR
     (?10 = 'uhrazeno' AND COALESCE("SkutÚhrada", 0) = COALESCE("PojistnáČástka", 0)) OR
-    (?10 = 'neuhrazeno' AND COALESCE("SkutÚhrada", 0) <> COALESCE("PojistnáČástka", 0)))"#;
+    (?10 = 'neuhrazeno' AND COALESCE("SkutÚhrada", 0) <> COALESCE("PojistnáČástka", 0)))
+AND (?11 = '' OR (?11 = 'po_splatnosti' AND EXISTS (
+    SELECT 1 FROM "PrikazyKUhrade" prikaz
+    WHERE prikaz."PojistnyZaznamRowId" = "Seznam".rowid
+      AND prikaz."PojistnyRok" = pojisteni_rok("Seznam"."PojištěníOd")
+      AND NULLIF(TRIM(prikaz."DatumSplatnosti"), '') IS NOT NULL
+      AND date(prikaz."DatumSplatnosti") < date('now', 'localtime')
+      AND COALESCE("Seznam"."SkutÚhrada", 0) < COALESCE("Seznam"."RočPojistné", 0)
+)))"#;
 
 fn source_database_path(app: &AppHandle) -> Result<PathBuf, String> {
     let mut candidates = Vec::new();
@@ -356,6 +368,7 @@ fn ensure_current_insurance_year(path: &Path) -> Result<i32, String> {
     let mut connection = open_write(path)?;
     tariffs::ensure_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
     payments::ensure_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
+    payments::ensure_order_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
     member_payments::ensure_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
     claims::ensure_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
     email_service::ensure_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
@@ -716,6 +729,7 @@ fn archive_member_page(
     let premium = clean_search(filters.premium);
     let payment = clean_search(filters.payment);
     let payment_status = clean_search(filters.payment_status);
+    let overdue = clean_search(filters.overdue);
     let total = connection.query_row(
         &format!(
             r#"SELECT COUNT(*) FROM "Seznam"
@@ -732,7 +746,8 @@ fn archive_member_page(
             status,
             premium,
             payment,
-            payment_status
+            payment_status,
+            overdue
         ],
         |row| row.get(0),
     )?;
@@ -741,7 +756,7 @@ fn archive_member_page(
            WHERE pojisteni_rok("PojištěníOd") = ?1 AND {ARCHIVE_SEARCH}
            {MEMBER_FILTERS}
            ORDER BY CAST("EvČíslo" AS INTEGER), rowid
-           LIMIT ?11 OFFSET ?12"#
+           LIMIT ?12 OFFSET ?13"#
     );
     let mut statement = connection.prepare(&sql)?;
     let members = statement
@@ -757,6 +772,7 @@ fn archive_member_page(
                 premium,
                 payment,
                 payment_status,
+                overdue,
                 page_size,
                 offset
             ],
@@ -769,6 +785,26 @@ fn archive_member_page(
         page,
         page_size,
     })
+}
+
+fn overdue_summary(
+    connection: &Connection,
+    insurance_year: i32,
+) -> rusqlite::Result<(i64, i64, Option<String>)> {
+    connection.query_row(
+        r#"SELECT COUNT(*),
+                  COALESCE(SUM(MAX(COALESCE(seznam."RočPojistné", 0) - COALESCE(seznam."SkutÚhrada", 0), 0)), 0),
+                  MIN(prikaz."DatumSplatnosti")
+           FROM "PrikazyKUhrade" prikaz
+           INNER JOIN "Seznam" seznam ON seznam.rowid = prikaz."PojistnyZaznamRowId"
+           WHERE prikaz."PojistnyRok" = ?1
+             AND pojisteni_rok(seznam."PojištěníOd") = ?1
+             AND NULLIF(TRIM(prikaz."DatumSplatnosti"), '') IS NOT NULL
+             AND date(prikaz."DatumSplatnosti") < date('now', 'localtime')
+             AND COALESCE(seznam."SkutÚhrada", 0) < COALESCE(seznam."RočPojistné", 0)"#,
+        [insurance_year],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )
 }
 
 fn validate_input(input: &NewInsured) -> Result<(Option<NaiveDate>, Option<NaiveDate>), String> {
@@ -1266,6 +1302,9 @@ fn get_dashboard(app: AppHandle, state: State<'_, AppState>) -> Result<Dashboard
             |row| row.get(0),
         )
         .map_err(|_| "Přehled se nepodařilo načíst.".to_string())?;
+    let (overdue_count, overdue_amount, oldest_due_date) =
+        overdue_summary(&connection, active_insurance_year)
+            .map_err(|_| "Přehled se nepodařilo načíst.".to_string())?;
     let modified = fs::metadata(path)
         .and_then(|metadata| metadata.modified())
         .map_err(|_| "Přehled se nepodařilo načíst.".to_string())?;
@@ -1281,6 +1320,9 @@ fn get_dashboard(app: AppHandle, state: State<'_, AppState>) -> Result<Dashboard
         commit_sha: option_env!("BUILD_COMMIT").unwrap_or("lokální sestavení"),
         build_date: option_env!("BUILD_DATE").unwrap_or("neuvedeno"),
         git_tag: option_env!("BUILD_TAG").unwrap_or("neuvedeno"),
+        overdue_count,
+        overdue_amount,
+        oldest_due_date,
     })
 }
 
@@ -1682,6 +1724,15 @@ fn generate_payment_order_pdf(
         .unwrap_or_else(|| order.row_id.to_string());
     drop(connection);
     let audit_connection = open_write(&path)?;
+    payments::record_order(
+        &audit_connection,
+        &member_identifier,
+        order.row_id,
+        active_year,
+        &draft.due_date,
+        draft.amount_due,
+        &draft.issue_date,
+    )?;
     payments::record_audit(
         &audit_connection,
         &user,
@@ -1710,13 +1761,17 @@ fn audit_payment_order_print(
         .map_err(|_| "Aktuální pojištění člena se nepodařilo načíst.".to_string())?;
     let identifier = member.identifier.unwrap_or_else(|| row_id.to_string());
     drop(connection);
-    payments::record_audit(
-        &open_write(&path)?,
-        &user,
+    let audit_connection = open_write(&path)?;
+    payments::record_order(
+        &audit_connection,
         &identifier,
+        row_id,
         active_year,
-        "PRINT",
-    )
+        &draft.due_date,
+        draft.amount_due,
+        &draft.issue_date,
+    )?;
+    payments::record_audit(&audit_connection, &user, &identifier, active_year, "PRINT")
 }
 
 #[tauri::command]
@@ -2073,6 +2128,7 @@ mod tests {
                 );"#,
             )
             .unwrap();
+        payments::ensure_order_schema(&connection).unwrap();
         for index in 1..=60_i64 {
             let personal_id = format!("TEST-{index:04}");
             for year in [2024_i64, 2026_i64] {
@@ -2402,6 +2458,68 @@ mod tests {
             member.actual_payment.as_deref().unwrap_or("0")
                 == member.premium.as_deref().unwrap_or("0")
         }));
+    }
+
+    #[test]
+    fn overdue_filter_uses_saved_due_date_and_excludes_fully_paid_member() {
+        let (_directory, database) = synthetic_database();
+        let connection = Connection::open(&database).unwrap();
+        register_insurance_year(&connection).unwrap();
+        let (row_id, identifier): (i64, String) = connection
+            .query_row(
+                r#"SELECT rowid, CAST("Identifikátor" AS TEXT) FROM "Seznam"
+               WHERE pojisteni_rok("PojištěníOd")=2026 AND "SkutÚhrada" < "RočPojistné" LIMIT 1"#,
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        payments::record_order(
+            &connection,
+            &identifier,
+            row_id,
+            2026,
+            "2020-01-01",
+            200_000,
+            "2019-12-01",
+        )
+        .unwrap();
+        assert_eq!(
+            overdue_summary(&connection, 2026).unwrap(),
+            (1, 200_000, Some("2020-01-01".into()))
+        );
+        let overdue = archive_member_page(
+            &connection,
+            2026,
+            None,
+            1,
+            200,
+            MemberFilters {
+                overdue: Some("po_splatnosti".into()),
+                ..MemberFilters::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(overdue.total, 1);
+        connection
+            .execute(
+                r#"UPDATE "Seznam" SET "SkutÚhrada"="RočPojistné" WHERE rowid=?1"#,
+                [row_id],
+            )
+            .unwrap();
+        let paid = archive_member_page(
+            &connection,
+            2026,
+            None,
+            1,
+            200,
+            MemberFilters {
+                overdue: Some("po_splatnosti".into()),
+                ..MemberFilters::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(paid.total, 0);
+        assert_eq!(overdue_summary(&connection, 2026).unwrap(), (0, 0, None));
     }
 
     #[test]

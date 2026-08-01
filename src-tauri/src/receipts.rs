@@ -137,7 +137,7 @@ pub fn save_settings(connection: &Connection, settings: &ReceiptSettings) -> Res
 }
 
 fn snapshot(connection: &Connection, row_id: i64, year: i32) -> Result<Snapshot, String> {
-    connection.query_row(
+    let result = connection.query_row(
         r#"SELECT COALESCE("Identifikátor",''),COALESCE("Titul",''),COALESCE("Jméno",''),COALESCE("Příjmení",''),
           COALESCE("RodnéČíslo",''),COALESCE(CAST("EvČíslo" AS TEXT),''),COALESCE("ZO",''),COALESCE("Adresa",''),
           COALESCE("Město",''),COALESCE("PSČ",''),COALESCE("Stát",'Česká republika'),COALESCE("Kategorie",''),
@@ -145,9 +145,43 @@ fn snapshot(connection: &Connection, row_id: i64, year: i32) -> Result<Snapshot,
           COALESCE("SkutÚhrada",0),COALESCE("e-mail",''),COALESCE(CAST("KódOC" AS TEXT),''),
           COALESCE((SELECT "Id" FROM "PlatbyClenu" WHERE "PojistnyZaznamRowId"=Seznam.rowid ORDER BY "DatumPrijeti" DESC,"Id" DESC LIMIT 1),0),
           COALESCE((SELECT "DatumPrijeti" FROM "PlatbyClenu" WHERE "PojistnyZaznamRowId"=Seznam.rowid ORDER BY "DatumPrijeti" DESC,"Id" DESC LIMIT 1),'')
-          FROM "Seznam" WHERE rowid=?1 AND insurance_year("PojištěníOd")=?2"#,
+          FROM "Seznam" WHERE rowid=?1 AND substr(CAST("PojištěníOd" AS TEXT),1,4)=CAST(?2 AS TEXT)"#,
         params![row_id,year], |row| Ok(Snapshot { identifier:row.get(0)?, title:row.get(1)?, first_name:row.get(2)?, last_name:row.get(3)?, personal_id:row.get(4)?, registration:row.get(5)?, organization:row.get(6)?, address:row.get(7)?, city:row.get(8)?, postal_code:row.get(9)?, country:row.get(10)?, category:row.get(11)?, insurance_from:row.get(12)?, insurance_to:row.get(13)?, insured_amount:row.get(14)?, premium:row.get(15)?, paid:row.get(16)?, email:row.get(17)?, organization_code:row.get(18)?, payment_id:row.get(19)?, paid_on:row.get(20)? })
-    ).map_err(|_| "Údaje pro doklad se nepodařilo načíst.".to_string())
+    );
+    match result {
+        Ok(snapshot) => Ok(snapshot),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Err(format!(
+            "Pro otevřeného člena nebylo nalezeno pojištění pro rok {year}."
+        )),
+        Err(error) => {
+            eprintln!("receipt snapshot query failed: {error}");
+            Err("Podklady dokladu se nepodařilo načíst.".to_string())
+        }
+    }
+}
+
+fn validate_required(snapshot: &Snapshot) -> Result<(), String> {
+    let required = [
+        ("interní identifikátor člena", snapshot.identifier.trim()),
+        ("jméno", snapshot.first_name.trim()),
+        ("příjmení", snapshot.last_name.trim()),
+        ("rodné číslo", snapshot.personal_id.trim()),
+        ("evidenční číslo", snapshot.registration.trim()),
+        ("kód OC", snapshot.organization_code.trim()),
+        ("kategorie", snapshot.category.trim()),
+        ("datum počátku pojištění", snapshot.insurance_from.trim()),
+        ("datum konce pojištění", snapshot.insurance_to.trim()),
+    ];
+    if let Some((name, _)) = required.into_iter().find(|(_, value)| value.is_empty()) {
+        return Err(format!("Doklad nelze vystavit: chybí {name}."));
+    }
+    if snapshot.insured_amount <= 0 {
+        return Err("Doklad nelze vystavit: chybí pojistná částka.".into());
+    }
+    if snapshot.premium <= 0 {
+        return Err("Doklad nelze vystavit: chybí roční pojistné.".into());
+    }
+    Ok(())
 }
 
 fn font_file() -> Result<File, String> {
@@ -362,7 +396,8 @@ pub fn create_if_eligible(
         return Ok(None);
     }
     let data = snapshot(&connection, row_id, year)?;
-    if data.premium <= 0 || data.paid < data.premium || data.payment_id == 0 {
+    validate_required(&data)?;
+    if data.paid < data.premium {
         return Ok(None);
     }
     if let Some(id)=connection.query_row(r#"SELECT "Id" FROM "DokladyOUhrade" WHERE "IdentifikatorClena"=?1 AND "PojistnyRok"=?2"#,params![data.identifier,year],|row|row.get(0)).optional().map_err(|_| "Doklad se nepodařilo ověřit.".to_string())? { return Ok(Some(id)); }
@@ -444,6 +479,48 @@ pub fn send(database: &Path, user: &str, id: i64) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    fn receipt_database(
+        email: Option<&str>,
+        address: Option<&str>,
+        first_name: Option<&str>,
+        include_payment: bool,
+    ) -> (tempfile::TempDir, std::path::PathBuf, i64) {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("receipt.sqlite");
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute_batch(
+                r#"CREATE TABLE "Seznam" (
+                "Identifikátor" TEXT, "Titul" TEXT, "Jméno" TEXT, "Příjmení" TEXT,
+                "RodnéČíslo" TEXT, "EvČíslo" INTEGER, "ZO" TEXT, "Adresa" TEXT,
+                "Město" TEXT, "PSČ" TEXT, "Stát" TEXT, "Kategorie" TEXT,
+                "PojištěníOd" TEXT, "PojištěníDo" TEXT, "PojistnáČástka" INTEGER,
+                "RočPojistné" INTEGER, "SkutÚhrada" INTEGER, "e-mail" TEXT, "KódOC" TEXT
+            );
+            CREATE TABLE "PlatbyClenu" (
+                "Id" INTEGER PRIMARY KEY AUTOINCREMENT,
+                "PojistnyZaznamRowId" INTEGER NOT NULL,
+                "DatumPrijeti" TEXT NOT NULL
+            );"#,
+            )
+            .unwrap();
+        connection.execute(
+            r#"INSERT INTO "Seznam" VALUES
+               ('member-1','Ing.',?1,'Novák','780101/1234',53,'FVČ',?2,'Praha','110 00','Česká republika','B',
+                '2026-01-01 00:00:00','2026-12-31 00:00:00',320000,781,781,?3,'2')"#,
+            params![first_name,address,email],
+        ).unwrap();
+        let row_id = connection.last_insert_rowid();
+        if include_payment {
+            connection.execute(
+                r#"INSERT INTO "PlatbyClenu"("PojistnyZaznamRowId","DatumPrijeti") VALUES(?1,'2026-07-31')"#,
+                [row_id],
+            ).unwrap();
+        }
+        ensure_schema(&connection).unwrap();
+        (directory, database, row_id)
+    }
+
     #[test]
     fn formats_czech_money() {
         assert_eq!(money(320_000), "320 000,00 Kč");
@@ -507,5 +584,100 @@ mod tests {
         let pdf = create_pdf(&snapshot, &path).unwrap();
         assert!(pdf.starts_with(b"%PDF"));
         assert!(pdf.len() > 100_000);
+    }
+
+    #[test]
+    fn fully_paid_member_without_existing_receipt_can_create_one() {
+        let (_directory, database, row_id) = receipt_database(
+            Some("jan@example.invalid"),
+            Some("Testovací 1"),
+            Some("Jan"),
+            false,
+        );
+        let connection = Connection::open(&database).unwrap();
+        assert!(list(&connection, Some(row_id), "").unwrap().is_empty());
+        drop(connection);
+        let id = create_if_eligible(&database, "tester", row_id, 2026, false).unwrap();
+        assert!(id.is_some());
+    }
+
+    #[test]
+    fn existing_receipt_is_returned_without_duplicate() {
+        let (_directory, database, row_id) = receipt_database(
+            Some("jan@example.invalid"),
+            Some("Testovací 1"),
+            Some("Jan"),
+            true,
+        );
+        let first = create_if_eligible(&database, "tester", row_id, 2026, false)
+            .unwrap()
+            .unwrap();
+        let second = create_if_eligible(&database, "tester", row_id, 2026, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(first, second);
+        let connection = Connection::open(database).unwrap();
+        assert_eq!(
+            connection
+                .query_row(r#"SELECT COUNT(*) FROM "DokladyOUhrade""#, [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn missing_email_is_optional() {
+        let (_directory, database, row_id) =
+            receipt_database(None, Some("Testovací 1"), Some("Jan"), true);
+        let id = create_if_eligible(&database, "tester", row_id, 2026, false)
+            .unwrap()
+            .unwrap();
+        let connection = Connection::open(database).unwrap();
+        let email: Option<String> = connection
+            .query_row(
+                r#"SELECT "EmailPrijemce" FROM "DokladyOUhrade" WHERE "Id"=?1"#,
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(email.is_none());
+    }
+
+    #[test]
+    fn null_optional_member_field_is_safe() {
+        let (_directory, database, row_id) =
+            receipt_database(Some("jan@example.invalid"), None, Some("Jan"), true);
+        assert!(create_if_eligible(&database, "tester", row_id, 2026, false)
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn missing_required_member_field_names_the_field() {
+        let (_directory, database, row_id) =
+            receipt_database(Some("jan@example.invalid"), Some("Testovací 1"), None, true);
+        let error = create_if_eligible(&database, "tester", row_id, 2026, false).unwrap_err();
+        assert_eq!(error, "Doklad nelze vystavit: chybí jméno.");
+    }
+
+    #[test]
+    fn snapshot_uses_open_member_year_and_amounts() {
+        let (_directory, database, row_id) = receipt_database(
+            Some("jan@example.invalid"),
+            Some("Testovací 1"),
+            Some("Jan"),
+            true,
+        );
+        let connection = Connection::open(database).unwrap();
+        let data = snapshot(&connection, row_id, 2026).unwrap();
+        assert_eq!(data.identifier, "member-1");
+        assert_eq!(data.registration, "53");
+        assert_eq!(data.premium, 781);
+        assert_eq!(data.paid, 781);
+        assert_eq!(data.insurance_from, "2026-01-01 00:00:00");
+        assert!(snapshot(&connection, row_id, 2025)
+            .unwrap_err()
+            .contains("rok 2025"));
     }
 }

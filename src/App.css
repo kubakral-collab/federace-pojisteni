@@ -236,6 +236,27 @@ button {
   font-size: 26px;
 }
 
+.dashboard-grid article.dashboard-card-action {
+  cursor: pointer;
+}
+
+.dashboard-grid article.dashboard-card-action:hover,
+.dashboard-grid article.dashboard-card-action:focus-visible {
+  border-color: #c78018;
+  box-shadow: 0 0 0 3px #c7801820;
+  outline: none;
+}
+
+.dashboard-grid article.dashboard-card-action svg {
+  color: #b56500;
+}
+
+.dashboard-grid article.dashboard-card-action span {
+  margin-top: 5px;
+  color: #65758a;
+  font-size: 13px;
+}
+
 .page-intro {
   max-width: 650px;
   color: #65758a;
