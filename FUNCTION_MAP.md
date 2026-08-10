@@ -1,5 +1,7 @@
 # Funkční mapa migrace Access → Tauri
 
+> **Historická implementační mapa.** Stav „Hotovo/Nahrazeno“ zde znamená existenci funkčního ekvivalentu, nikoli potvrzenou úplnou datovou a provozní shodu. Aktuální audit, zjištěné mezery a pracovní plán jsou závazně vedeny v `docs/ACCESS_PARITY_AUDIT_AND_PLAN.md`.
+
 ## Účel a metodika
 
 Tento dokument porovnává funkce původní aplikace s aktuálním stavem Tauri aplikace v tomto repozitáři. **Jediným zdrojem informací o původní aplikaci je dodaný `ACCESS_AUDIT_PACKAGE.zip`** (zejména `ACCESS_AUDIT_SUMMARY.md`, `FORMS.md`, `BUTTONS.md`, `MACROS.md`, `VBA.md`, `QUERIES.md`, `REPORTS.md`, `TABLES_RELATIONS.md` a exporty v `evidence/`). Access databáze nebyla znovu otevřena ani auditována. Stav Tauri je určen z aktuálního zdrojového kódu a jeho testů.

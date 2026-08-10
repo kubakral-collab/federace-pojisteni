@@ -19,9 +19,9 @@ P0 kritická chyba; P1 vysoká priorita; P2 plánovaná funkce; P3 budoucí rozv
 ## Ověřený stav
 Ověřeno proti tagům `v0.17.0`–`v0.21.0`, kódu a testům.
 
-**Implementováno:** audit Accessu; migrace a oddělení aktuálního roku od archivu; dashboard; seznam/detail/nový člen; sazby; platby; archiv; příkaz k úhradě; univerzální hledání; filtr organizace; splatnost a dashboard po splatnosti; první správce a Argon2id; ruční záloha/obnova; doklady (evidence, detail, levé menu, PDF, úplná úhrada, Access šablony); SMTP a Windows Credential Manager; pojistné události; přehled pro pojišťovnu; GitHub, CI/CD, Releases, podepsaný Tauri Updater, EXE/MSI.
+**Implementováno:** technický audit Access objektů; bezeztrátový převod 24 lokálních tabulek do SQLite; oddělení aktuálního roku od archivu; dashboard; seznam/detail/nový člen; sazby; platby; archiv nad tabulkou `Seznam`; příkaz k úhradě; hledání; filtry; přihlášení; zálohy; doklady; SMTP; nové pojistné události; přehledy; CI/CD a podepsaný updater.
 
-**Částečně / stabilizace:** vizuální regrese všech variant dokladů; provozní SMTP end-to-end; úplné sjednocení auditu citlivých operací.
+**Částečně / stabilizace:** úplná provozní parita Accessu není potvrzená. Audit odhalil nezpřístupněné historické události, faktury, roky 2002–2010 a historii sestav; dokumenty a sestavy nemají dokončené side-by-side a vizuální regrese. Závazný stav a plán je v [ACCESS_PARITY_AUDIT_AND_PLAN.md](ACCESS_PARITY_AUDIT_AND_PLAN.md).
 
 ## Milestones
 - **M1 Funkční náhrada Accessu — stabilizace:** základní agendy jsou implementované; zbývá potvrdit provozní paritu a RC kvalitu.
@@ -31,13 +31,14 @@ Ověřeno proti tagům `v0.17.0`–`v0.21.0`, kódu a testům.
 
 ## Aktuální sprint
 
-### FED-UDALOSTI-HISTORY-01 — Historické údaje pojištění u pojistných událostí
+### FED-ACCESS-PARITY-AUDIT-01 — Audit funkční shody Access → Federace
 
 - **Milestone:** M1 — Stabilizace Core
-- **Stav:** implementováno; build a automatické regrese prošly, čeká na uživatelský smoke test
+- **Stav:** audit a pracovní plán sepsány; implementace nápravných sprintů nezahájena
 - **Priorita:** P1
-- **Scope:** `UDALOSTI-001` — rok události odvodit z data vzniku a použít přesný historický pojistný záznam; při chybějících datech nesmí nastat fallback na aktuální rok.
-- **Navazující sprint:** `FED-CONTACT-CALC-01` je rovněž implementován; telefon je dostupný při založení, editaci i v detailu a poměrné pojistné používá finální zaokrouhlení nahoru.
+- **Scope:** porovnat zdrojový Access, převedená data a současnou aplikaci; klasifikovat shodu dat, workflow, výpočtů a výstupů; vytvořit prioritizovaný plán bez automatického řešení nejasností.
+- **Výstup:** [ACCESS_PARITY_AUDIT_AND_PLAN.md](ACCESS_PARITY_AUDIT_AND_PLAN.md).
+- **Navržený první navazující sprint:** read-only `FED-PARITY-SOURCE-RECONCILE-01`, protože produkční Access a `dd.sqlite` mají rozdílný počet řádků hlavní evidence; vyžaduje samostatné schválení Product Ownerem. První implementační oprava má následně být `FED-PARITY-CLAIMS-MIGRATION-01`.
 
 ## Schválený budoucí scope
 

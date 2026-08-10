@@ -1,5 +1,7 @@
 # Dokončení funkční parity Access → Tauri
 
+> **Historický implementační záznam, nikoli aktuální potvrzení úplné parity.** Následný audit odhalil nezpřístupněná historická data a neověřené výstupy. Aktuální stav a závazný pracovní plán jsou v [ACCESS_PARITY_AUDIT_AND_PLAN.md](ACCESS_PARITY_AUDIT_AND_PLAN.md).
+
 Datum ověření: 2026-08-05
 
 Tento dokument je auditní stopou implementace chybějících oblastí z `FUNCTION_MAP.md`. Databáze Access nebyla měněna. Nové operace v Tauri používají pracovní SQLite databázi, role, validace, transakce, zálohy a auditní tabulky podle dopadu operace.
