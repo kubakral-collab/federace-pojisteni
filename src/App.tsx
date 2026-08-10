@@ -214,8 +214,8 @@ type PaymentOrderDraft = {
 type Claim = {
   id: number;
   memberIdentifier: number;
-  insuranceRowId: number;
-  insuranceYear: number;
+  insuranceRowId?: number;
+  insuranceYear?: number;
   occurredOn?: string;
   reportedOn?: string;
   assessedDamage?: number;
@@ -225,13 +225,15 @@ type Claim = {
   additionalInformation?: string; handledBy?: string; reportPosition?: string;
   closedOn?: string;
   status: "Otevřená" | "Uzavřená";
+  linkStatus: "VYRESENA" | "CHYBI_DATUM" | "CHYBI_ROK" | "NEJEDNOZNACNA";
 };
 
 type ClaimOverview = {
-  id: number; memberRowId: number; memberName: string; registrationNumber: string;
-  organizationCode: string; insuranceYear: number; occurredOn?: string; reportedOn?: string;
+  id: number; memberRowId?: number; memberName: string; registrationNumber: string;
+  organizationCode: string; insuranceYear?: number; occurredOn?: string; reportedOn?: string;
   description?: string; assessedDamage?: number; insuranceBenefit?: number;
   status: "Otevřená" | "Uzavřená"; lastChanged: string;
+  linkStatus: "VYRESENA" | "CHYBI_DATUM" | "CHYBI_ROK" | "NEJEDNOZNACNA";
 };
 
 type MemberPayment = {
@@ -2244,7 +2246,7 @@ export default function App() {
             <input value={claimOcFilter} onChange={(event) => setClaimOcFilter(event.target.value)} placeholder="Kód OC" />
           </div>
           <div className="claims-table"><table><thead><tr><th>Číslo události</th><th>Člen</th><th>Evidenční číslo</th><th>Kód OC</th><th>Datum vzniku</th><th>Datum nahlášení</th><th>Typ události</th><th>Stav</th><th>Požadovaná částka</th><th>Vyplacená částka</th><th>Poslední změna</th><th>Akce</th></tr></thead><tbody>
-            {visibleClaims.map((claim) => <tr key={claim.id}><td>{claim.id}</td><td>{claim.memberName}</td><td>{claim.registrationNumber}</td><td>{claim.organizationCode}</td><td>{displayDate(claim.occurredOn)}</td><td>{displayDate(claim.reportedOn)}</td><td>{display(claim.description)}</td><td>{claim.status}</td><td>{displayCurrency(claim.assessedDamage)}</td><td>{displayCurrency(claim.insuranceBenefit)}</td><td>{displayDateTime(claim.lastChanged)}</td><td className="row-actions"><button title="Uložit hlášení PDF" onClick={() => void exportClaimDocument(claim.id)}><FileText /></button><button title="Upravit událost" onClick={() => void editAgendaClaim(claim)}><Pencil /></button><button title="Otevřít detail člena" onClick={() => { setScreen("Seznam"); void openMember(claim.memberRowId); }}><Users /></button></td></tr>)}
+            {visibleClaims.map((claim) => <tr key={claim.id}><td>{claim.id}</td><td>{claim.memberName}</td><td>{claim.registrationNumber}</td><td>{claim.organizationCode}</td><td>{displayDate(claim.occurredOn)}</td><td>{displayDate(claim.reportedOn)}</td><td>{display(claim.description)}</td><td>{claim.status}{claim.linkStatus!=="VYRESENA"&&<small className="claim-link-warning"> · historická vazba k dořešení</small>}</td><td>{displayCurrency(claim.assessedDamage)}</td><td>{displayCurrency(claim.insuranceBenefit)}</td><td>{displayDateTime(claim.lastChanged)}</td><td className="row-actions"><button disabled={claim.linkStatus!=="VYRESENA"} title={claim.linkStatus==="VYRESENA"?"Uložit hlášení PDF":"Dokument vyžaduje vyřešenou historickou vazbu"} onClick={() => void exportClaimDocument(claim.id)}><FileText /></button><button disabled={claim.linkStatus!=="VYRESENA"} title={claim.linkStatus==="VYRESENA"?"Upravit událost":"Historický záznam je pouze pro čtení"} onClick={() => void editAgendaClaim(claim)}><Pencil /></button><button disabled={!claim.memberRowId} title={claim.memberRowId?"Otevřít detail člena":"Historická vazba na pojistný záznam není vyřešena"} onClick={() => { if(claim.memberRowId){setScreen("Seznam");void openMember(claim.memberRowId);} }}><Users /></button></td></tr>)}
             {!claimsLoading && visibleClaims.length === 0 && <tr><td colSpan={12} className="empty-row">Nebyly nalezeny žádné pojistné události.</td></tr>}
           </tbody></table></div>
         </div>
@@ -3099,11 +3101,11 @@ export default function App() {
                       <tbody>
                         {memberClaims.map((claim) => (
                           <tr key={claim.id}>
-                            <td>{claim.id}</td><td>{claim.insuranceYear}</td><td>{displayDate(claim.occurredOn)}</td>
+                            <td>{claim.id}</td><td>{claim.insuranceYear ?? "—"}</td><td>{displayDate(claim.occurredOn)}</td>
                             <td>{display(claim.description)}</td><td>{displayCurrency(claim.assessedDamage)}</td>
                             <td>{displayCurrency(claim.insuranceBenefit)}</td>
                             <td><span className={`claim-status ${claim.status === "Otevřená" ? "open" : "closed"}`}>{claim.status}</span></td>
-                            <td><button title="Uložit hlášení PDF" onClick={() => void exportClaimDocument(claim.id)}><FileText /></button></td>
+                            <td><button disabled={claim.linkStatus!=="VYRESENA"} title={claim.linkStatus==="VYRESENA"?"Uložit hlášení PDF":"Dokument vyžaduje vyřešenou historickou vazbu"} onClick={() => void exportClaimDocument(claim.id)}><FileText /></button></td>
                           </tr>
                         ))}
                         {!claimsLoading && memberClaims.length === 0 && <tr><td colSpan={8} className="empty-row">Člen nemá evidovanou pojistnou událost.</td></tr>}

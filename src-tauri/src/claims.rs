@@ -8,8 +8,8 @@ use std::{fs::File, io::BufWriter, path::Path};
 pub struct Claim {
     pub id: i64,
     pub member_identifier: i64,
-    pub insurance_row_id: i64,
-    pub insurance_year: i32,
+    pub insurance_row_id: Option<i64>,
+    pub insurance_year: Option<i32>,
     pub occurred_on: Option<String>,
     pub reported_on: Option<String>,
     pub phone: Option<String>,
@@ -24,17 +24,18 @@ pub struct Claim {
     pub handled_by: Option<String>,
     pub report_position: Option<String>,
     pub status: String,
+    pub link_status: String,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClaimOverview {
     pub id: i64,
-    pub member_row_id: i64,
+    pub member_row_id: Option<i64>,
     pub member_name: String,
     pub registration_number: String,
     pub organization_code: String,
-    pub insurance_year: i32,
+    pub insurance_year: Option<i32>,
     pub occurred_on: Option<String>,
     pub reported_on: Option<String>,
     pub description: Option<String>,
@@ -42,6 +43,7 @@ pub struct ClaimOverview {
     pub insurance_benefit: Option<f64>,
     pub status: String,
     pub last_changed: String,
+    pub link_status: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -86,8 +88,72 @@ pub fn ensure_schema(connection: &Connection) -> rusqlite::Result<()> {
             "Vytvoreno" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS "IX_PojistneUdalosti_Clen"
-          ON "PojistneUdalosti" ("IdentifikatorClena", "PojistnyRok");"#,
-    )
+          ON "PojistneUdalosti" ("IdentifikatorClena", "PojistnyRok");
+        CREATE TABLE IF NOT EXISTS "MigracePojistnychUdalostiAccess" (
+            "ID" INTEGER PRIMARY KEY,
+            "IdentifikatorClena" INTEGER NOT NULL,
+            "Povolani" TEXT, "Zamestnavatel" TEXT, "OznameniPU" TEXT, "VznikPU" TEXT,
+            "PopisUdalosti" TEXT, "Poznamka1" TEXT, "Poznamka2" TEXT,
+            "ZjistenaSkoda" REAL, "PojistnePlneni" REAL, "Ukonceno" TEXT,
+            "ResiPojistovna" TEXT, "PolohaVSestave" TEXT, "Telefon" TEXT, "Email" TEXT,
+            "PojistnyRok" INTEGER, "PojistnyZaznamRowId" INTEGER,
+            "StavVazby" TEXT NOT NULL CHECK("StavVazby" IN ('VYRESENA','CHYBI_DATUM','CHYBI_ROK','NEJEDNOZNACNA')),
+            "Migrovano" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );"#,
+    )?;
+    let has_legacy: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='Poj_udalost')",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_legacy {
+        migrate_access_claims(connection)?;
+    }
+    Ok(())
+}
+
+fn migrate_access_claims(connection: &Connection) -> rusqlite::Result<()> {
+    connection.execute_batch(r#"
+        INSERT OR IGNORE INTO "MigracePojistnychUdalostiAccess"(
+          "ID","IdentifikatorClena","Povolani","Zamestnavatel","OznameniPU","VznikPU",
+          "PopisUdalosti","Poznamka1","Poznamka2","ZjistenaSkoda","PojistnePlneni",
+          "Ukonceno","ResiPojistovna","PolohaVSestave","Telefon","Email",
+          "PojistnyRok","PojistnyZaznamRowId","StavVazby")
+        SELECT legacy."ID",legacy."Identifikátor",legacy."Povolání",legacy."Zaměstnavatel",
+          legacy."Oznámení_PU",legacy."Vznik_PU",CAST(legacy."Popis_Události" AS TEXT),
+          CAST(legacy."Poznámka1" AS TEXT),CAST(legacy."Poznámka2" AS TEXT),
+          legacy."Zjištěná_škoda",legacy."Pojistné_plnění",legacy."Ukončeno",
+          legacy."Řeší_pojišťovna",legacy."Poloha v sestavě",legacy."Telefon",legacy."E-mail",
+          CASE WHEN legacy."Vznik_PU" IS NULL OR TRIM(legacy."Vznik_PU")='' THEN NULL
+               ELSE CAST(SUBSTR(legacy."Vznik_PU",1,4) AS INTEGER) END,
+          CASE WHEN legacy."Vznik_PU" IS NOT NULL AND TRIM(legacy."Vznik_PU")<>'' AND
+                    (SELECT COUNT(*) FROM "Seznam" member
+                     WHERE member."Identifikátor"=legacy."Identifikátor"
+                       AND CAST(SUBSTR(member."PojištěníOd",1,4) AS INTEGER)=CAST(SUBSTR(legacy."Vznik_PU",1,4) AS INTEGER))=1
+               THEN (SELECT MIN(member.rowid) FROM "Seznam" member
+                     WHERE member."Identifikátor"=legacy."Identifikátor"
+                       AND CAST(SUBSTR(member."PojištěníOd",1,4) AS INTEGER)=CAST(SUBSTR(legacy."Vznik_PU",1,4) AS INTEGER)) END,
+          CASE WHEN legacy."Vznik_PU" IS NULL OR TRIM(legacy."Vznik_PU")='' THEN 'CHYBI_DATUM'
+               WHEN (SELECT COUNT(*) FROM "Seznam" member
+                     WHERE member."Identifikátor"=legacy."Identifikátor"
+                       AND CAST(SUBSTR(member."PojištěníOd",1,4) AS INTEGER)=CAST(SUBSTR(legacy."Vznik_PU",1,4) AS INTEGER))=0 THEN 'CHYBI_ROK'
+               WHEN (SELECT COUNT(*) FROM "Seznam" member
+                     WHERE member."Identifikátor"=legacy."Identifikátor"
+                       AND CAST(SUBSTR(member."PojištěníOd",1,4) AS INTEGER)=CAST(SUBSTR(legacy."Vznik_PU",1,4) AS INTEGER))>1 THEN 'NEJEDNOZNACNA'
+               ELSE 'VYRESENA' END
+        FROM "Poj_udalost" legacy;
+
+        INSERT OR IGNORE INTO "PojistneUdalosti"(
+          "ID","IdentifikatorClena","PojistnyZaznamRowId","PojistnyRok","Telefon",
+          "Zamestnavatel","Povolani","VznikPU","OznameniPU","ZjistenaSkoda",
+          "PojistnePlneni","PopisUdalosti","Poznamka1","Poznamka2","Ukonceno",
+          "ResiPojistovna","PolohaVSestave","Vytvoreno")
+        SELECT "ID","IdentifikatorClena","PojistnyZaznamRowId","PojistnyRok","Telefon",
+          "Zamestnavatel","Povolani","VznikPU","OznameniPU","ZjistenaSkoda",
+          "PojistnePlneni","PopisUdalosti","Poznamka1","Poznamka2","Ukonceno",
+          "ResiPojistovna","PolohaVSestave","Migrovano"
+        FROM "MigracePojistnychUdalostiAccess" WHERE "StavVazby"='VYRESENA';
+    "#)
 }
 
 fn clean(value: Option<String>) -> Option<String> {
@@ -102,10 +168,17 @@ pub fn list_for_member(connection: &Connection, identifier: i64) -> rusqlite::Re
         r#"SELECT "ID", "IdentifikatorClena", "PojistnyZaznamRowId", "PojistnyRok",
                   "VznikPU", "OznameniPU", "Telefon", "Zamestnavatel", "Povolani",
                   "ZjistenaSkoda", "PojistnePlneni", "PopisUdalosti", "Poznamka1",
-                  "Poznamka2", "Ukonceno", "ResiPojistovna", "PolohaVSestave"
+                  "Poznamka2", "Ukonceno", "ResiPojistovna", "PolohaVSestave", 'VYRESENA'
            FROM "PojistneUdalosti"
            WHERE "IdentifikatorClena" = ?1
-           ORDER BY COALESCE("VznikPU", '') DESC, "ID" DESC"#,
+           UNION ALL
+           SELECT "ID","IdentifikatorClena","PojistnyZaznamRowId","PojistnyRok",
+                  "VznikPU","OznameniPU","Telefon","Zamestnavatel","Povolani",
+                  "ZjistenaSkoda","PojistnePlneni","PopisUdalosti","Poznamka1",
+                  "Poznamka2","Ukonceno","ResiPojistovna","PolohaVSestave","StavVazby"
+           FROM "MigracePojistnychUdalostiAccess"
+           WHERE "IdentifikatorClena"=?1 AND "StavVazby"<>'VYRESENA'
+           ORDER BY 5 DESC, 1 DESC"#,
     )?;
     let claims = statement
         .query_map([identifier], |row| {
@@ -133,6 +206,7 @@ pub fn list_for_member(connection: &Connection, identifier: i64) -> rusqlite::Re
                 closed_on,
                 handled_by: row.get(15)?,
                 report_position: row.get(16)?,
+                link_status: row.get(17)?,
             })
         })?
         .collect();
@@ -147,10 +221,23 @@ pub fn list_all(connection: &Connection) -> rusqlite::Result<Vec<ClaimOverview>>
                   COALESCE(CAST(member."KódOC" AS TEXT), ''),
                   claim."PojistnyRok", claim."VznikPU", claim."OznameniPU",
                   claim."PopisUdalosti", claim."ZjistenaSkoda", claim."PojistnePlneni",
-                  claim."Ukonceno", claim."Vytvoreno"
+                  claim."Ukonceno", claim."Vytvoreno", 'VYRESENA'
            FROM "PojistneUdalosti" claim
            JOIN "Seznam" member ON member.rowid = claim."PojistnyZaznamRowId"
-           ORDER BY COALESCE(claim."VznikPU", claim."Vytvoreno") DESC, claim."ID" DESC"#,
+           UNION ALL
+           SELECT legacy."ID", NULL,
+                  TRIM(COALESCE(member."Titul", '') || ' ' || COALESCE(member."Příjmení", '') || ' ' || COALESCE(member."Jméno", '')),
+                  COALESCE(CAST(member."EvČíslo" AS TEXT), ''),
+                  COALESCE(CAST(member."KódOC" AS TEXT), ''),
+                  legacy."PojistnyRok",legacy."VznikPU",legacy."OznameniPU",
+                  legacy."PopisUdalosti",legacy."ZjistenaSkoda",legacy."PojistnePlneni",
+                  legacy."Ukonceno",legacy."Migrovano",legacy."StavVazby"
+           FROM "MigracePojistnychUdalostiAccess" legacy
+           LEFT JOIN "Seznam" member ON member.rowid=(
+             SELECT MAX(candidate.rowid) FROM "Seznam" candidate
+             WHERE candidate."Identifikátor"=legacy."IdentifikatorClena")
+           WHERE legacy."StavVazby"<>'VYRESENA'
+           ORDER BY 7 DESC, 1 DESC"#,
     )?;
     let claims = statement
         .query_map([], |row| {
@@ -173,6 +260,7 @@ pub fn list_all(connection: &Connection) -> rusqlite::Result<Vec<ClaimOverview>>
                     "Uzavřená".into()
                 },
                 last_changed: row.get(12)?,
+                link_status: row.get(13)?,
             })
         })?
         .collect();
@@ -532,5 +620,84 @@ mod tests {
         }
         export_pdf(&connection, 116, &destination).unwrap();
         assert!(fs::metadata(destination).unwrap().len() > 1_000);
+    }
+
+    #[test]
+    fn access_claim_migration_preserves_all_rows_and_is_idempotent() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(r#"
+            CREATE TABLE "Seznam" ("Identifikátor" INTEGER,"PojištěníOd" TEXT);
+            INSERT INTO "Seznam" VALUES (10,'2024-01-01'),(20,'2025-01-01'),(30,'2024-01-01'),(30,'2024-02-01'),(40,'2024-01-01');
+            CREATE TABLE "Poj_udalost" (
+              "ID" INTEGER NOT NULL,"Identifikátor" INTEGER,"Povolání" TEXT,"Zaměstnavatel" TEXT,
+              "Oznámení_PU" TEXT,"Vznik_PU" TEXT,"Popis_Události" TEXT,"Poznámka1" TEXT,
+              "Poznámka2" TEXT,"Zjištěná_škoda" NUMERIC,"Pojistné_plnění" NUMERIC,
+              "Ukončeno" TEXT,"Řeší_pojišťovna" TEXT,"Poloha v sestavě" TEXT,"Telefon" TEXT,"E-mail" TEXT);
+            INSERT INTO "Poj_udalost"("ID","Identifikátor","Vznik_PU","Popis_Události") VALUES
+              (1,10,'2024-06-01 00:00:00','vyřešená'),
+              (2,20,'2024-06-01 00:00:00','chybí rok'),
+              (3,30,'2024-06-01 00:00:00','nejednoznačná'),
+              (4,40,NULL,'chybí datum');
+        "#).unwrap();
+        ensure_schema(&connection).unwrap();
+        ensure_schema(&connection).unwrap();
+        let archived: i64 = connection
+            .query_row(
+                r#"SELECT COUNT(*) FROM "MigracePojistnychUdalostiAccess""#,
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let migrated: i64 = connection
+            .query_row(r#"SELECT COUNT(*) FROM "PojistneUdalosti""#, [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let statuses: (i64,i64,i64,i64) = connection.query_row(
+            r#"SELECT SUM("StavVazby"='VYRESENA'),SUM("StavVazby"='CHYBI_ROK'),SUM("StavVazby"='NEJEDNOZNACNA'),SUM("StavVazby"='CHYBI_DATUM') FROM "MigracePojistnychUdalostiAccess""#,
+            [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))
+        ).unwrap();
+        assert_eq!(archived, 4);
+        assert_eq!(migrated, 1);
+        assert_eq!(statuses, (1, 1, 1, 1));
+    }
+
+    #[test]
+    fn verified_access_copy_migrates_98_and_queues_14() {
+        let Some(path) = std::env::var_os("FED_CLAIMS_MIGRATION_DB") else {
+            return;
+        };
+        let connection = Connection::open(path).unwrap();
+        ensure_schema(&connection).unwrap();
+        ensure_schema(&connection).unwrap();
+        let archived: i64 = connection
+            .query_row(
+                r#"SELECT COUNT(*) FROM "MigracePojistnychUdalostiAccess""#,
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let migrated: i64 = connection
+            .query_row(
+                r#"SELECT COUNT(*) FROM "PojistneUdalosti" WHERE "ID"<=115"#,
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let unresolved: i64 = connection.query_row(
+            r#"SELECT COUNT(*) FROM "MigracePojistnychUdalostiAccess" WHERE "StavVazby"<>'VYRESENA'"#,
+            [], |row| row.get(0)
+        ).unwrap();
+        assert_eq!((archived, migrated, unresolved), (112, 98, 14));
+        let visible = list_all(&connection).unwrap();
+        assert_eq!(visible.len(), 112);
+        assert_eq!(
+            visible
+                .iter()
+                .map(|claim| claim.id)
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            112
+        );
     }
 }

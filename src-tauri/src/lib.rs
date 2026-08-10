@@ -2355,13 +2355,22 @@ fn get_system_diagnostics(
         .and_then(|p| fs::read_dir(p).ok())
         .map(|x| x.filter_map(Result::ok).count() as i64)
         .unwrap_or(0);
+    let claims = connection
+        .query_row(
+            r#"SELECT
+              (SELECT COUNT(*) FROM "PojistneUdalosti") +
+              (SELECT COUNT(*) FROM "MigracePojistnychUdalostiAccess" WHERE "StavVazby"<>'VYRESENA')"#,
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
     Ok(SystemDiagnostics {
         database_path: path.to_string_lossy().into_owned(),
         integrity,
         application_version: env!("CARGO_PKG_VERSION").into(),
         active_year: year,
         members: count("Seznam"),
-        claims: count("PojistneUdalosti"),
+        claims,
         receipts: count("DokladyOUhrade"),
         invoices: count("VydaneFaktury"),
         backups,

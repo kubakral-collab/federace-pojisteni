@@ -72,7 +72,7 @@ Všechny doložené funkční oblasti Accessu mají v Tauri aplikaci provozní e
 | ID | Funkce původního Accessu | Důkaz v balíčku | Ekvivalent v Tauri | Stav | Priorita / poznámka |
 | --- | --- | --- | --- | --- | --- |
 | FM-25 | Evidence nové pojistné události | `Poj_udalost`, `Dotaz1/5`, pomocná tabulka `Poj_udalost_zdroj` | Založení události s validací a auditem | Nahrazeno | Přímá transakce nahrazuje pracovní tabulku. |
-| FM-26 | Přehled a detail událostí | `Poj_udalost` a dotaz `test` | Centrální přehled a události v detailu člena | Hotovo | — |
+| FM-26 | Přehled a detail událostí | `Poj_udalost` a dotaz `test` | Centrální přehled všech 112 původních událostí; 98 přesně napojených a 14 read-only vazeb k dořešení | Hotovo | Migrace je idempotentní a zachovává původní ID i zdrojová pole. |
 | FM-27 | Úprava údajů události včetně stavu, škody a plnění | `Poj_Udalost_upr` | Editace události | Hotovo | — |
 | FM-28 | Úprava kontaktního e-mailu při práci s událostí | `Poj_Udalost_mail` | E-mail se upravuje v detailu člena | Nahrazeno | Jediný zdroj kontaktního údaje. |
 | FM-29 | Tisk/zobrazení hlášení pojistné události a souhrnné sestavy | `PojUdálost`, `PojUdálost_sest`; tlačítko „Uložit a zobrazit“ | Individuální PDF hlášení z obou agend a filtrovaná HVP sestava s Accessovou strukturou, PDF, CSV a auditem | Hotovo | Vizuálně ověřeno ve `FED-PARITY-DOCUMENTS-01`. |
