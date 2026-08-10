@@ -20,6 +20,8 @@ impl CurrentInsuranceYear {
         database_path: &Path,
         calendar_year: i32,
     ) -> Result<i32, String> {
+        Self::ensure_phone_column(connection)
+            .map_err(|_| "Pojistné období se nepodařilo načíst.")?;
         Self::create_schema(connection).map_err(|_| "Pojistné období se nepodařilo načíst.")?;
         Self::seed_periods(connection).map_err(|_| "Pojistné období se nepodařilo načíst.")?;
         let active =
@@ -31,6 +33,18 @@ impl CurrentInsuranceYear {
         Self::roll_forward(connection, active, calendar_year)
             .map_err(|_| "Nové pojistné období se nepodařilo vytvořit.")?;
         Ok(calendar_year)
+    }
+
+    fn ensure_phone_column(connection: &Connection) -> rusqlite::Result<()> {
+        let exists = connection
+            .prepare(r#"PRAGMA table_info("Seznam")"#)?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .filter_map(Result::ok)
+            .any(|name| name == "Telefon");
+        if !exists {
+            connection.execute(r#"ALTER TABLE "Seznam" ADD COLUMN "Telefon" TEXT"#, [])?;
+        }
+        Ok(())
     }
 
     fn create_schema(connection: &Connection) -> rusqlite::Result<()> {
@@ -148,7 +162,7 @@ impl CurrentInsuranceYear {
                    "PojistnáČástka", "PojistNespotř", "Kategorie", "Ztráta",
                    "KódOC", "EvČíslo", "Titul", "Příjmení", "Jméno", "RodnéČíslo",
                    "Město", "Adresa", "PSČ", "Stát", "Poznámka", "OdbPříslušnost",
-                   "ZO", "Ukončení", "SkutÚhrada", "Doklad", "e-mail", "Tisk", "DatumTisku"
+                   "ZO", "Ukončení", "SkutÚhrada", "Doklad", "e-mail", "Telefon", "Tisk", "DatumTisku"
                )
                SELECT
                    ?1 + ROW_NUMBER() OVER (ORDER BY rowid),
@@ -164,7 +178,7 @@ impl CurrentInsuranceYear {
                    "PojistNespotř",
                    "Kategorie", "Ztráta", "KódOC", "EvČíslo", "Titul", "Příjmení",
                    "Jméno", "RodnéČíslo", "Město", "Adresa", "PSČ", "Stát",
-                   NULL, "OdbPříslušnost", "ZO", NULL, 0, 0, "e-mail", 0, NULL
+                   NULL, "OdbPříslušnost", "ZO", NULL, 0, 0, "e-mail", "Telefon", 0, NULL
                FROM "Seznam" AS source
                WHERE pojisteni_rok(source."PojištěníOd") = ?4
                  AND NULLIF(TRIM(source."Ukončení"), '') IS NULL

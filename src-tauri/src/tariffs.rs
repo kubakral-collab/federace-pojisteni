@@ -169,7 +169,7 @@ pub fn calculate(
     Ok(premium.map(|premium| TariffResult {
         premium,
         months,
-        insured_amount: premium as f64 / 12.0 * months as f64,
+        insured_amount: (premium as f64 / 12.0 * months as f64).ceil(),
     }))
 }
 
@@ -301,5 +301,40 @@ pub fn save(connection: &Connection, input: TariffRateInput) -> Result<i64, Stri
             )
             .map_err(|_| "Sazbu se nepodařilo uložit.")?;
         Ok(connection.last_insert_rowid())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn partial_year_premium_is_rounded_up_only_after_full_calculation() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(r#"CREATE TABLE "sazby_pojistneho"("pojistna_castka" INTEGER,"kategorie" TEXT,"pojisteni_ztraty" INTEGER,"rocni_pojistne" INTEGER,"platnost_od" TEXT,"platnost_do" TEXT,"aktivni" INTEGER);INSERT INTO "sazby_pojistneho" VALUES(200000,'B',0,1001,'2020-01-01',NULL,1);"#).unwrap();
+        let result = calculate(
+            &c,
+            "B",
+            false,
+            200000,
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            1,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(result.insured_amount, 84.0);
+        assert_eq!(
+            calculate(
+                &c,
+                "B",
+                false,
+                200000,
+                NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                12
+            )
+            .unwrap()
+            .unwrap()
+            .insured_amount,
+            1001.0
+        );
     }
 }

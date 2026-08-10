@@ -39,7 +39,7 @@ import { SETTINGS_MODULES } from "./modules/settings";
 const UPDATE_CHECK_ENABLED_KEY = "pojisteni.updateCheckEnabled";
 const LAST_UPDATE_CHECK_KEY = "pojisteni.lastUpdateCheck";
 
-type Screen = "Vstup" | "Přehled" | "Pojištěnci" | "Seznam" | "Přidat platbu" | "Doklady o zaplacení" | "Pojistné události" | "Přehled pro pojišťovnu" | "Nová pojistná událost" | "Příkaz k úhradě" | "Archiv" | "Správa záloh" | "Nastavení" | "O programu";
+type Screen = "Vstup" | "Přehled" | "Pojištěnci" | "Seznam" | "Přidat platbu" | "Doklady o zaplacení" | "Pojistné události" | "Přehled pro pojišťovnu" | "Sestavy a exporty" | "Faktury a dávky" | "Import členů" | "Diagnostika" | "Nová pojistná událost" | "Příkaz k úhradě" | "Archiv" | "Správa záloh" | "Nastavení" | "O programu";
 
 type Receipt = {
   id: number; memberRowId: number; memberIdentifier: string; paymentId: number;
@@ -100,6 +100,7 @@ type Member = {
   country?: string;
   organization?: string;
   email?: string;
+  phone?: string;
 };
 
 type MemberPage = {
@@ -121,6 +122,13 @@ type DashboardInfo = {
   overdueCount: number;
   overdueAmount: number;
   oldestDueDate?: string;
+};
+
+type InsurerOverview = {
+  insuranceYear: number;
+  members: Member[];
+  totalPremium: number;
+  totalPaid: number;
 };
 
 type MemberFilters = {
@@ -168,6 +176,14 @@ type PaymentSettings = {
 type EmailSettings = { server: string; port: number; username: string; senderEmail: string; encryption: string; credentialName: string; passwordConfigured: boolean; password?: string };
 type ReceiptSettings = { automaticCreation: boolean; automaticSending: boolean; emailSubject: string; emailBody: string; policyholder: string; contractNumber: string };
 type PaymentDocumentBasis = { memberRowId: number; memberName: string; registrationNumber: string; organizationCode: string; insuranceYear: number; prescribedPremium: number; paidAmount: number; paymentDates: string[]; contractNumber: string; insuranceStatus: string; lossInsurance: boolean; certificateReady: boolean };
+type BatchCertificateFilter = { paidFrom: string; organizationCode: string; organization: string };
+type BatchCertificateResult = { selected: number; created: number; existing: number; skipped: number; errors: string[]; receiptIds: number[] };
+type OperationalReportFilter = { kind: string; year: number; organizationCode: string; organization: string; dateFrom: string; dateTo: string; search:string };
+type OperationalReport = { title: string; columns: string[]; rows: string[][]; totalRows: number };
+type Invoice = { id:number; number:string; supplier:string; account:string; variableSymbol:string; amount:number; dueOn:string; status:string; batchId?:number; note?:string };
+type InvoiceInput = { supplier:string; accountNumber:string; bankCode:string; variableSymbol:string; constantSymbol:string; specificSymbol:string; amount:string; dueOn:string; note:string };
+type ImportPreview={path:string;total:number;valid:number;skippedDuplicates:number;errors:string[];sample:string[][]};
+type SystemDiagnostics={databasePath:string;integrity:string;applicationVersion:string;activeYear:number;members:number;claims:number;receipts:number;invoices:number;backups:number};
 
 type PaymentOrderDraft = {
   rowId: number;
@@ -229,7 +245,15 @@ type MemberPayment = {
   status: string;
   importedFromBank: boolean;
   bankTransactionId?: string;
+  paymentType: "Jednotlivec" | "Organizace";
+  organizationPaymentId?: number;
+  organization?: string;
 };
+
+type OrganizationOption = { name: string; memberCount: number };
+type OrganizationMember = { rowId: number; identifier: string; name: string; registrationNumber: string; expected: number; paid: number };
+type OrganizationPayment = { id:number; organization:string; receivedOn:string; insuranceYear:number; receivedAmount:number; expectedAmount:number; unassignedOverpayment:number; note?:string; memberCount:number };
+type OrganizationPaymentDetail = { payment:OrganizationPayment; allocations:{memberRowId:number;memberName:string;registrationNumber:string;amount:number}[] };
 
 type MemberPaymentForm = {
   id?: number;
@@ -298,6 +322,7 @@ type MemberUpdate = {
   affiliation: string;
   code: string;
   email: string;
+  phone: string;
   note: string;
   actualPayment: number | null;
   actualTermination: string;
@@ -324,6 +349,7 @@ type InsuredForm = {
   code: number;
   registrationYear: number;
   email: string;
+  phone: string;
 };
 
 const emptyFilters: MemberFilters = {
@@ -408,6 +434,7 @@ function emptyForm(year: number): InsuredForm {
     code: 1,
     registrationYear: year,
     email: "",
+    phone: "",
   };
 }
 
@@ -648,7 +675,7 @@ function ContactSection({ member }: { member: Member }) {
     .filter(Boolean)
     .join(", ");
   return <DetailSection title="Kontakt" rows={[
-    ["Telefon", "—"],
+    ["Telefon", display(member.phone)],
     ["E-mail", member.email ? <span className="copyable-value">{member.email}</span> : "—"],
     ["Adresa", display(member.address)],
     ["Obec", display(member.city)],
@@ -739,6 +766,10 @@ function Shell({ active, user, onNavigate, onLogout, updater, backupBusy, onCrea
     { screen: "Příkaz k úhradě", label: "Příkazy k úhradě", icon: <FileText /> },
     { screen: "Pojistné události", label: "Pojistné události", icon: <TriangleAlert /> },
     { screen: "Přehled pro pojišťovnu", label: "Přehled pro pojišťovnu", icon: <LayoutDashboard /> },
+    { screen: "Sestavy a exporty", label: "Sestavy a exporty", icon: <FileText /> },
+    { screen: "Faktury a dávky", label: "Faktury a dávky", icon: <CreditCard /> },
+    { screen: "Import členů", label: "Import členů", icon: <Upload /> },
+    { screen: "Diagnostika", label: "Diagnostika", icon: <Settings /> },
     { screen: "Archiv", label: "Archiv", icon: <Archive /> },
     { screen: "Nastavení", label: "Nastavení", icon: <Settings /> },
     { screen: "Pojištěnci", label: "Nový pojištěnec", icon: <UserPlus /> },
@@ -900,11 +931,21 @@ export default function App() {
   const [memberPayments, setMemberPayments] = useState<MemberPayment[]>([]);
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [receiptSearch, setReceiptSearch] = useState("");
+  const [batchCertificateFilter, setBatchCertificateFilter] = useState<BatchCertificateFilter>({ paidFrom: "", organizationCode: "", organization: "" });
+  const [batchCertificateResult, setBatchCertificateResult] = useState<BatchCertificateResult | null>(null);
+  const [batchCertificateBusy, setBatchCertificateBusy] = useState(false);
   const [memberReceipts, setMemberReceipts] = useState<Receipt[]>([]);
   const [paymentDocumentBasis, setPaymentDocumentBasis] = useState<PaymentDocumentBasis | null>(null);
   const [memberPaymentForm, setMemberPaymentForm] = useState<MemberPaymentForm | null>(null);
+  const [paymentKind,setPaymentKind]=useState<"individual"|"organization">("individual");
+  const [paymentOrganizations,setPaymentOrganizations]=useState<OrganizationOption[]>([]);
+  const [organizationMembers,setOrganizationMembers]=useState<OrganizationMember[]>([]);
+  const [organizationPayments,setOrganizationPayments]=useState<OrganizationPayment[]>([]);
+  const [organizationPaymentDetail,setOrganizationPaymentDetail]=useState<OrganizationPaymentDetail|null>(null);
+  const [organizationPaymentForm,setOrganizationPaymentForm]=useState({organization:"",year:new Date().getFullYear(),receivedOn:new Date().toISOString().slice(0,10),receivedAmount:"",note:"",selected:{} as Record<number,boolean>,amounts:{} as Record<number,string>});
   const [claimsLoading, setClaimsLoading] = useState(false);
   const [claimForm, setClaimForm] = useState<ClaimForm | null>(null);
+  const [claimInsuranceMember,setClaimInsuranceMember]=useState<Member|null>(null);
   const [createdClaimId, setCreatedClaimId] = useState<number | null>(null);
   const [editingClaimId, setEditingClaimId] = useState<number | null>(null);
   const [agendaSearch, setAgendaSearch] = useState("");
@@ -913,6 +954,17 @@ export default function App() {
   const [claimYearFilter, setClaimYearFilter] = useState("");
   const [claimStatusFilter, setClaimStatusFilter] = useState("");
   const [claimOcFilter, setClaimOcFilter] = useState("");
+  const [insurerSelection, setInsurerSelection] = useState("new");
+  const [insurerOverview, setInsurerOverview] = useState<InsurerOverview | null>(null);
+  const [insurerLoading, setInsurerLoading] = useState(false);
+  const [reportFilter, setReportFilter] = useState<OperationalReportFilter>({ kind: "insurer", year: new Date().getFullYear(), organizationCode: "", organization: "", dateFrom: "", dateTo: "",search:"" });
+  const [operationalReport, setOperationalReport] = useState<OperationalReport | null>(null);
+  const [reportBusy, setReportBusy] = useState(false);
+  const [invoices,setInvoices]=useState<Invoice[]>([]);
+  const [invoiceForm,setInvoiceForm]=useState<InvoiceInput>({supplier:"",accountNumber:"",bankCode:"",variableSymbol:"",constantSymbol:"",specificSymbol:"",amount:"",dueOn:new Date().toISOString().slice(0,10),note:""});
+  const [financeBusy,setFinanceBusy]=useState(false);
+  const [importPreview,setImportPreview]=useState<ImportPreview|null>(null);const [importBusy,setImportBusy]=useState(false);
+  const [diagnostics,setDiagnostics]=useState<SystemDiagnostics|null>(null);
   const [dashboard, setDashboard] = useState<DashboardInfo | null>(
     preview
       ? {
@@ -1229,7 +1281,28 @@ export default function App() {
       void openArchive();
       return;
     }
+    if (next === "Přehled pro pojišťovnu") {
+      setScreen(next);
+      void loadInsurerOverview(insurerSelection);
+      return;
+    }
+    if (next === "Faktury a dávky") { setScreen(next); void loadInvoices(); return; }
+    if (next === "Přidat platbu") { setScreen(next); void loadPaymentWorkspace(); return; }
+    if (next === "Diagnostika") { setScreen(next); void loadDiagnostics(); return; }
     setScreen(next);
+  }
+
+  async function loadInsurerOverview(selection: string) {
+    setInsurerLoading(true);
+    setError("");
+    setInsurerSelection(selection);
+    try {
+      setInsurerOverview(await invoke<InsurerOverview>("get_insurer_overview", { selection }));
+    } catch (message) {
+      setError(String(message));
+    } finally {
+      setInsurerLoading(false);
+    }
   }
 
   async function searchAgendaMembers(event?: FormEvent) {
@@ -1292,7 +1365,7 @@ export default function App() {
     setClaimsLoading(true);
     setError("");
     try {
-      const member = await invoke<Member>("get_current_member", { rowId: claim.memberRowId });
+      const member = await invoke<Member>("get_member", { rowId: claim.memberRowId });
       const claims = await invoke<Claim[]>("list_member_claims", { rowId: claim.memberRowId });
       const detail = claims.find((item) => item.id === claim.id);
       if (!detail) throw new Error("Pojistná událost nebyla nalezena.");
@@ -1310,6 +1383,7 @@ export default function App() {
         additionalInformation: detail.additionalInformation ?? "", closedOn: detail.closedOn ?? "",
         handledBy: detail.handledBy ?? "", reportPosition: detail.reportPosition ?? "",
       });
+      setClaimInsuranceMember(member);
       setScreen("Nová pojistná událost");
     } catch (message) {
       setError(String(message));
@@ -1344,6 +1418,7 @@ export default function App() {
     setCreatedClaimId(null);
     setEditingClaimId(null);
     setClaimForm(emptyClaimForm(member.rowId));
+    setClaimInsuranceMember(null);
     setScreen("Nová pojistná událost");
   }
 
@@ -1431,6 +1506,80 @@ export default function App() {
     }
   }
 
+  async function createCertificateBatch() {
+    setBatchCertificateBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await invoke<BatchCertificateResult>("create_certificate_batch", { filter: {
+        paidFrom: optional(batchCertificateFilter.paidFrom),
+        organizationCode: optional(batchCertificateFilter.organizationCode),
+        organization: optional(batchCertificateFilter.organization),
+      } });
+      setBatchCertificateResult(result);
+      await loadReceipts(undefined, "");
+      setNotice(`Dávka dokončena: ${result.created} nových, ${result.existing} již existujících, ${result.skipped} přeskočených.`);
+    } catch (message) {
+      setError(String(message));
+    } finally {
+      setBatchCertificateBusy(false);
+    }
+  }
+
+  async function exportCertificateBatch() {
+    if (!batchCertificateResult?.receiptIds.length) return;
+    setBatchCertificateBusy(true);
+    setError("");
+    try {
+      const directory = await invoke<string | null>("export_certificate_batch", { receiptIds: batchCertificateResult.receiptIds });
+      if (directory) setNotice(`Pojistná potvrzení byla uložena do ${directory}.`);
+    } catch (message) {
+      setError(String(message));
+    } finally {
+      setBatchCertificateBusy(false);
+    }
+  }
+
+  async function previewOperationalReport() {
+    setReportBusy(true); setError("");
+    try { setOperationalReport(await invoke<OperationalReport>("preview_operational_report", { filter: reportFilter })); }
+    catch (message) { setError(String(message)); }
+    finally { setReportBusy(false); }
+  }
+
+  async function exportOperationalReport(format: "pdf" | "csv") {
+    setReportBusy(true); setError("");
+    try { const path=await invoke<string | null>("export_operational_report", { filter: reportFilter, format }); if(path)setNotice(`Sestava byla uložena do ${path}.`); }
+    catch (message) { setError(String(message)); }
+    finally { setReportBusy(false); }
+  }
+
+  async function loadInvoices(){setFinanceBusy(true);setError("");try{setInvoices(await invoke<Invoice[]>("list_invoices"));}catch(message){setError(String(message));}finally{setFinanceBusy(false);}}
+  async function saveInvoice(){setFinanceBusy(true);setError("");try{await invoke("create_invoice",{invoice:{...invoiceForm,amount:Number(invoiceForm.amount),constantSymbol:optional(invoiceForm.constantSymbol),specificSymbol:optional(invoiceForm.specificSymbol),note:optional(invoiceForm.note)}});setInvoiceForm({...invoiceForm,supplier:"",variableSymbol:"",amount:"",note:""});await loadInvoices();setNotice("Faktura byla založena.");}catch(message){setError(String(message));}finally{setFinanceBusy(false);}}
+  async function exportPaymentBatch(){setFinanceBusy(true);setError("");try{const path=await invoke<string|null>("export_payment_batch");if(path){await loadInvoices();setNotice(`Platební dávka byla uložena do ${path}.`);}}catch(message){setError(String(message));}finally{setFinanceBusy(false);}}
+  async function exportMemberDocument(member:Member,kind:"application"|"voucher"|"envelope"|"label"){setError("");try{const path=await invoke<string|null>("export_member_document",{rowId:member.rowId,kind});if(path)setNotice(`Dokument byl uložen do ${path}.`);}catch(message){setError(String(message));}}
+  async function chooseMemberImport(){setImportBusy(true);setError("");try{setImportPreview(await invoke<ImportPreview|null>("choose_member_import"));}catch(message){setError(String(message));}finally{setImportBusy(false);}}
+  async function executeMemberImport(){if(!importPreview||importPreview.errors.length)return;setImportBusy(true);setError("");try{const result=await invoke<{inserted:number;skippedDuplicates:number}>("execute_member_import",{source:importPreview.path});setNotice(`Import dokončen: ${result.inserted} vloženo, ${result.skippedDuplicates} duplicit přeskočeno.`);setImportPreview(null);}catch(message){setError(String(message));}finally{setImportBusy(false);}}
+  async function loadDiagnostics(){setError("");try{setDiagnostics(await invoke<SystemDiagnostics>("get_system_diagnostics"));}catch(message){setError(String(message));}}
+
+  async function loadPaymentWorkspace(){
+    const year=dashboard?.activeInsuranceYear??new Date().getFullYear();
+    setOrganizationPaymentForm(current=>({...current,year}));
+    try{const [organizations,payments]=await Promise.all([invoke<OrganizationOption[]>("list_payment_organizations",{year}),invoke<OrganizationPayment[]>("list_organization_payments")]);setPaymentOrganizations(organizations);setOrganizationPayments(payments);}catch(message){setError(String(message));}
+  }
+  async function selectPaymentOrganization(organization:string){
+    const year=organizationPaymentForm.year;
+    setOrganizationPaymentDetail(null);setError("");
+    try{const members=await invoke<OrganizationMember[]>("list_organization_payment_members",{organization,year});const selected:Record<number,boolean>={};const amounts:Record<number,string>={};members.forEach(member=>{selected[member.rowId]=true;amounts[member.rowId]=String(member.expected)});setOrganizationMembers(members);setOrganizationPaymentForm(current=>({...current,organization,selected,amounts}));}catch(message){setError(String(message));}
+  }
+  function selectOnlyUnpaid(){const selected:Record<number,boolean>={};const amounts={...organizationPaymentForm.amounts};organizationMembers.forEach(member=>{selected[member.rowId]=member.paid<member.expected;if(member.paid<member.expected)amounts[member.rowId]=String(member.expected)});setOrganizationPaymentForm({...organizationPaymentForm,selected,amounts});}
+  function selectedOrganizationMembers(){return organizationMembers.filter(member=>organizationPaymentForm.selected[member.rowId]);}
+  async function saveOrganizationPayment(){
+    const members=selectedOrganizationMembers();setSaving(true);setError("");
+    try{await invoke("save_organization_payment",{payment:{organization:organizationPaymentForm.organization,receivedOn:organizationPaymentForm.receivedOn,insuranceYear:organizationPaymentForm.year,receivedAmount:Number(organizationPaymentForm.receivedAmount),note:optional(organizationPaymentForm.note),allocations:members.map(member=>({rowId:member.rowId,amount:Number(organizationPaymentForm.amounts[member.rowId]??0)}))}});setNotice("Organizační platba byla uložena.");setOrganizationMembers([]);setOrganizationPaymentForm(current=>({...current,organization:"",receivedAmount:"",note:"",selected:{},amounts:{}}));await loadPaymentWorkspace();setDashboard(await invoke<DashboardInfo>("get_dashboard"));}catch(message){setError(String(message));}finally{setSaving(false);}
+  }
+  async function openOrganizationPayment(id:number){try{setOrganizationPaymentDetail(await invoke<OrganizationPaymentDetail>("get_organization_payment",{id}));}catch(message){setError(String(message));}}
+
   function newMemberPayment(member: Member) {
     setMemberPaymentForm({ insuranceRowId: member.rowId, receivedOn: new Date().toISOString().slice(0, 10), amount: "", method: "Bankovní převod", note: "" });
   }
@@ -1500,6 +1649,13 @@ export default function App() {
     } finally {
       setClaimsLoading(false);
     }
+  }
+
+  async function resolveClaimInsurance(occurredOn:string){
+    if(!claimForm)return;
+    setClaimForm({...claimForm,occurredOn});setClaimInsuranceMember(null);setError("");
+    if(!occurredOn)return;
+    try{const member=await invoke<Member>("resolve_claim_insurance",{rowId:claimForm.insuranceRowId,occurredOn});setClaimInsuranceMember(member);setClaimForm(current=>current?{...current,occurredOn,insuranceRowId:member.rowId}:current);}catch(message){setError(String(message));}
   }
 
   async function createPaymentPdf() {
@@ -1755,11 +1911,26 @@ export default function App() {
       affiliation: member.affiliation ?? "",
       code: member.code ?? "",
       email: member.email ?? "",
+      phone: member.phone ?? "",
       note: member.note ?? "",
       actualPayment: member.actualPayment ? Number(member.actualPayment) : 0,
       actualTermination: member.actualTermination?.slice(0, 10) ?? "",
     });
     setEditingMember(true);
+  }
+
+  async function deactivateMember(member: Member) {
+    const reason = window.prompt(`Uveďte důvod storna aktuálního pojištění člena ${member.insured}:`);
+    if (reason === null) return;
+    if (!window.confirm("Storno ukončí aktuální pojistný záznam. Historie a audit zůstanou zachovány. Pokračovat?")) return;
+    setSaving(true); setError("");
+    try {
+      await invoke("deactivate_current_member", { rowId: member.rowId, reason });
+      setSelectedMember(null);
+      await loadMembers(1);
+      setNotice("Aktuální pojistný záznam byl stornován a operace zapsána do auditu.");
+    } catch (message) { setError(String(message)); }
+    finally { setSaving(false); }
   }
 
   async function saveMemberEdit() {
@@ -1995,14 +2166,22 @@ export default function App() {
   }
 
   if (screen === "Přidat platbu") {
+    const chosen=selectedOrganizationMembers();
+    const expected=chosen.reduce((sum,member)=>sum+member.expected,0);
+    const received=Number(organizationPaymentForm.receivedAmount||0);
+    const allocationTotal=chosen.reduce((sum,member)=>sum+Number(organizationPaymentForm.amounts[member.rowId]||0),0);
+    const overpayment=Math.max(received-expected,0);
+    const requiredAllocation=received-overpayment;
     return (
       <Shell {...shellUpdater} active="Přidat platbu" user={user} onNavigate={navigate} onLogout={leaveToLogin}>
         <div className="page agenda-page">
-          <header className="page-header"><div><small>Platby</small><h1>Přidat platbu</h1></div></header>
+          <header className="page-header"><div><small>Platby</small><h1>Platby</h1></div><button className="primary" onClick={()=>{setSelectedMember(null);setMemberPaymentForm(null);setOrganizationPaymentDetail(null);}}><Plus/> Přidat platbu</button></header>
           {error && <div className="message error">{error}</div>}
           {notice && <div className="message success">{notice}</div>}
+          <section className="agenda-workspace"><h2>Nová platba</h2><div className="form-actions"><button className={paymentKind==="individual"?"primary":""} onClick={()=>setPaymentKind("individual")}>Jednotlivec</button><button className={paymentKind==="organization"?"primary":""} onClick={()=>setPaymentKind("organization")}>Organizace</button></div></section>
+          {paymentKind==="individual" && <>
           <form className="search-bar" onSubmit={searchAgendaMembers}>
-            <Search /><input value={agendaSearch} onChange={(event) => setAgendaSearch(event.target.value)} placeholder="Jméno, evidenční číslo, kód OC nebo rodné číslo" />
+            <Search /><input value={agendaSearch} onChange={(event) => setAgendaSearch(event.target.value)} placeholder="Ev. číslo, jméno, příjmení, organizace nebo variabilní symbol" />
             <button className="primary">Vyhledat člena</button>
           </form>
           {agendaMembers.length > 0 && <div className="agenda-member-results"><table><thead><tr><th>Evidenční číslo</th><th>Člen</th><th>Kód OC</th><th>Rok</th><th>Stav úhrady</th><th></th></tr></thead><tbody>
@@ -2028,6 +2207,15 @@ export default function App() {
               <footer><button className="primary" disabled={saving} onClick={saveMemberPayment}><Save /> Uložit platbu</button></footer>
             </section>}
           </section>}
+          </>}
+          {paymentKind==="organization" && <>
+            <section className="agenda-workspace">
+              <div className="payment-settings-form"><label>Organizace<select value={organizationPaymentForm.organization} onChange={event=>void selectPaymentOrganization(event.target.value)}><option value="">Vyberte organizaci</option>{paymentOrganizations.map(item=><option key={item.name} value={item.name}>{item.name} ({item.memberCount})</option>)}</select></label><label>Pojistný rok<input type="number" value={organizationPaymentForm.year} onChange={event=>setOrganizationPaymentForm({...organizationPaymentForm,year:Number(event.target.value)})}/></label><label>Datum platby<input type="date" value={organizationPaymentForm.receivedOn} onChange={event=>setOrganizationPaymentForm({...organizationPaymentForm,receivedOn:event.target.value})}/></label><label>Skutečně přijato (Kč)<input type="number" min="1" value={organizationPaymentForm.receivedAmount} onChange={event=>setOrganizationPaymentForm({...organizationPaymentForm,receivedAmount:event.target.value})}/></label><label className="wide">Poznámka<textarea value={organizationPaymentForm.note} onChange={event=>setOrganizationPaymentForm({...organizationPaymentForm,note:event.target.value})}/></label></div>
+              {!!organizationMembers.length&&<><div className="form-actions"><button onClick={selectOnlyUnpaid}>Vybrat jen nezaplacené</button></div><div className="claims-table"><table><thead><tr><th>Vybrat</th><th>Ev. číslo</th><th>Člen</th><th>Pojistné</th><th>Uhrazeno</th><th>Připsat</th></tr></thead><tbody>{organizationMembers.map(member=><tr key={member.rowId}><td><input type="checkbox" checked={!!organizationPaymentForm.selected[member.rowId]} onChange={event=>setOrganizationPaymentForm({...organizationPaymentForm,selected:{...organizationPaymentForm.selected,[member.rowId]:event.target.checked}})}/></td><td>{member.registrationNumber}</td><td>{member.name}</td><td>{displayCurrency(member.expected)}</td><td>{displayCurrency(member.paid)}</td><td><input type="number" min="0" max={member.expected} disabled={!organizationPaymentForm.selected[member.rowId]} value={organizationPaymentForm.amounts[member.rowId]??""} onChange={event=>setOrganizationPaymentForm({...organizationPaymentForm,amounts:{...organizationPaymentForm.amounts,[member.rowId]:event.target.value}})}/></td></tr>)}</tbody></table></div><div className="payment-summary-cards"><div><span>Celkem očekáváno</span><strong>{displayCurrency(expected)}</strong></div><div><span>Skutečně přijato</span><strong>{displayCurrency(received)}</strong></div><div><span>{received>expected?"Nepřiřazený přeplatek":"Rozdíl"}</span><strong>{displayCurrency(received-expected)}</strong></div><div><span>Součet rozpisu</span><strong>{displayCurrency(allocationTotal)}</strong></div></div>{allocationTotal!==requiredAllocation&&<div className="message error">Součet rozpisu musí být {displayCurrency(requiredAllocation)}.</div>}<button className="primary" disabled={saving||received<=0||allocationTotal!==requiredAllocation} onClick={()=>void saveOrganizationPayment()}><Save/> Uložit organizační platbu</button></>}
+            </section>
+            <h2>Organizační platby</h2><div className="claims-table"><table><thead><tr><th>Typ</th><th>Organizace</th><th>Datum</th><th>Rok</th><th>Celkem</th><th>Členů</th><th>Přeplatek</th><th></th></tr></thead><tbody>{organizationPayments.map(payment=><tr key={payment.id}><td>Organizace</td><td>{payment.organization}</td><td>{displayDate(payment.receivedOn)}</td><td>{payment.insuranceYear}</td><td>{displayCurrency(payment.receivedAmount)}</td><td>{payment.memberCount}</td><td>{displayCurrency(payment.unassignedOverpayment)}</td><td><button onClick={()=>void openOrganizationPayment(payment.id)}>Detail</button></td></tr>)}{!organizationPayments.length&&<tr><td colSpan={8} className="empty-row">Zatím nejsou organizační platby.</td></tr>}</tbody></table></div>
+            {organizationPaymentDetail&&<section className="agenda-workspace"><h2>{organizationPaymentDetail.payment.organization} — detail platby</h2><p>{displayDate(organizationPaymentDetail.payment.receivedOn)} · {displayCurrency(organizationPaymentDetail.payment.receivedAmount)} · nepřiřazený přeplatek {displayCurrency(organizationPaymentDetail.payment.unassignedOverpayment)}</p><div className="claims-table"><table><thead><tr><th>Ev. číslo</th><th>Člen</th><th>Připsáno</th></tr></thead><tbody>{organizationPaymentDetail.allocations.map(item=><tr key={item.memberRowId}><td>{item.registrationNumber}</td><td>{item.memberName}</td><td>{displayCurrency(item.amount)}</td></tr>)}</tbody></table></div></section>}
+          </>}
         </div>
       </Shell>
     );
@@ -2070,10 +2258,75 @@ export default function App() {
           <header className="page-header">
             <div><small>Pojištění</small><h1>Přehled pro pojišťovnu</h1></div>
           </header>
-          <div className="message">Modul se připravuje.</div>
+          {error && <div className="message error">{error}</div>}
+          <section className="overview-controls">
+            <label>Výběr přehledu
+              <select value={insurerSelection} disabled={insurerLoading} onChange={(event) => void loadInsurerOverview(event.target.value)}>
+                <option value="new">Nově pojištění v aktuálním roce</option>
+                <option value="terminated">Ukončení v aktuálním roce</option>
+                <option value="underpaid">Neuhrazené nebo nedoplacené pojistné</option>
+                <option value="oc1">Aktivní členové OC 1</option>
+                <option value="oc2">Aktivní členové OC 2</option>
+              </select>
+            </label>
+          </section>
+          {insurerOverview && <>
+            <section className="stats-grid compact-stats">
+              <article><span>Pojistný rok</span><strong>{insurerOverview.insuranceYear}</strong></article>
+              <article><span>Počet záznamů</span><strong>{insurerOverview.members.length}</strong></article>
+              <article><span>Předepsané pojistné</span><strong>{displayCurrency(insurerOverview.totalPremium)}</strong></article>
+              <article><span>Skutečně uhrazeno</span><strong>{displayCurrency(insurerOverview.totalPaid)}</strong></article>
+            </section>
+            <div className="claims-table"><table><thead><tr><th>Ev. číslo</th><th>Pojištěnec</th><th>OC</th><th>Organizace</th><th>Kategorie</th><th>Pojištění od</th><th>Ukončení</th><th>Pojistné</th><th>Uhrazeno</th><th></th></tr></thead><tbody>
+              {insurerOverview.members.map((member) => <tr key={member.rowId}><td>{display(member.registrationNumber)}</td><td>{member.insured}</td><td>{display(member.code)}</td><td>{display(member.affiliation)}</td><td>{display(member.category)}</td><td>{displayDate(member.insuranceFrom)}</td><td>{displayDate(member.actualTermination)}</td><td>{displayCurrency(member.premium)}</td><td>{displayCurrency(member.actualPayment)}</td><td><button title="Otevřít detail člena" onClick={() => { setScreen("Seznam"); void openMember(member.rowId); }}><Users /></button></td></tr>)}
+              {!insurerLoading && insurerOverview.members.length === 0 && <tr><td colSpan={10} className="empty-row">Pro zvolený přehled nejsou žádné záznamy.</td></tr>}
+            </tbody></table></div>
+          </>}
+          {insurerLoading && <div className="message">Načítám přehled…</div>}
         </div>
       </Shell>
     );
+  }
+
+  if(screen==="Diagnostika")return <Shell {...shellUpdater} active="Diagnostika" user={user} onNavigate={navigate} onLogout={leaveToLogin}><div className="page"><header className="page-header"><div><small>Servis</small><h1>Diagnostika aplikace</h1></div><button onClick={()=>void loadDiagnostics()}><Settings/> Obnovit kontrolu</button></header>{error&&<div className="message error">{error}</div>}{diagnostics&&<><div className={`message ${diagnostics.integrity==="ok"?"success":"error"}`}>Integrita databáze: {diagnostics.integrity}</div><section className="stats-grid"><article><span>Verze aplikace</span><strong>{diagnostics.applicationVersion}</strong></article><article><span>Aktivní rok</span><strong>{diagnostics.activeYear}</strong></article><article><span>Členové</span><strong>{diagnostics.members}</strong></article><article><span>Události</span><strong>{diagnostics.claims}</strong></article><article><span>Doklady</span><strong>{diagnostics.receipts}</strong></article><article><span>Faktury</span><strong>{diagnostics.invoices}</strong></article><article><span>Zálohy</span><strong>{diagnostics.backups}</strong></article></section><section className="agenda-workspace"><h2>Databázový soubor</h2><code>{diagnostics.databasePath}</code><p>Diagnostika je pouze pro čtení; nenahrazuje ani nespouští původní Access makra a klávesové sekvence.</p></section></>}</div></Shell>;
+
+  if(screen==="Import členů")return <Shell {...shellUpdater} active="Import členů" user={user} onNavigate={navigate} onLogout={leaveToLogin}><div className="page"><header className="page-header"><div><small>Data</small><h1>Validovaný import členů</h1></div><button className="primary" disabled={importBusy} onClick={()=>void chooseMemberImport()}><Upload/> Vybrat CSV</button></header>{error&&<div className="message error">{error}</div>}{notice&&<div className="message success">{notice}</div>}<section className="agenda-workspace"><p>Import používá CSV UTF‑8 se záhlavím. Povinné sloupce: Jméno, Příjmení, Rodné číslo, Evidenční číslo, Pojištění od, Pojištění do, Kategorie, Pojistná částka a Pojistné. Před zápisem vznikne záloha; duplicitní rodné nebo evidenční číslo ve stejném roce se přeskočí.</p>{importPreview&&<><div className="payment-summary-cards"><div><span>Řádků</span><strong>{importPreview.total}</strong></div><div><span>Platných</span><strong>{importPreview.valid}</strong></div><div><span>Duplicity</span><strong>{importPreview.skippedDuplicates}</strong></div><div><span>Chyby</span><strong>{importPreview.errors.length}</strong></div></div>{importPreview.errors.length>0&&<div className="message error"><ul>{importPreview.errors.map(e=><li key={e}>{e}</li>)}</ul></div>}<div className="claims-table"><table><thead><tr><th>Ev. číslo</th><th>Člen</th><th>Rodné číslo</th><th>Pojištění od</th><th>ZO</th></tr></thead><tbody>{importPreview.sample.map((r,i)=><tr key={i}>{r.map((v,j)=><td key={j}>{v}</td>)}</tr>)}</tbody></table></div><button className="primary" disabled={importBusy||!!importPreview.errors.length||!importPreview.valid} onClick={()=>void executeMemberImport()}><Plus/> Provést import v transakci</button></>}</section></div></Shell>;
+
+  if(screen==="Faktury a dávky") return <Shell {...shellUpdater} active="Faktury a dávky" user={user} onNavigate={navigate} onLogout={leaveToLogin}><div className="page">
+    <header className="page-header"><div><small>Finance</small><h1>Faktury a dávkové příkazy</h1></div><button className="primary" disabled={financeBusy||!invoices.some(i=>i.status==="PŘIPRAVENA")} onClick={()=>void exportPaymentBatch()}><Upload/> Exportovat platební dávku</button></header>
+    {error&&<div className="message error">{error}</div>}{notice&&<div className="message success">{notice}</div>}
+    <section className="agenda-workspace"><h2>Nová faktura</h2><div className="payment-settings-form">
+      <label>Dodavatel<input value={invoiceForm.supplier} onChange={e=>setInvoiceForm({...invoiceForm,supplier:e.target.value})}/></label><label>Číslo účtu<input value={invoiceForm.accountNumber} onChange={e=>setInvoiceForm({...invoiceForm,accountNumber:e.target.value.replace(/\D/g,"")})}/></label><label>Kód banky<input value={invoiceForm.bankCode} onChange={e=>setInvoiceForm({...invoiceForm,bankCode:e.target.value.replace(/\D/g,"")})}/></label><label>Variabilní symbol<input value={invoiceForm.variableSymbol} onChange={e=>setInvoiceForm({...invoiceForm,variableSymbol:e.target.value.replace(/\D/g,"")})}/></label><label>Konstantní symbol<input value={invoiceForm.constantSymbol} onChange={e=>setInvoiceForm({...invoiceForm,constantSymbol:e.target.value.replace(/\D/g,"")})}/></label><label>Specifický symbol<input value={invoiceForm.specificSymbol} onChange={e=>setInvoiceForm({...invoiceForm,specificSymbol:e.target.value.replace(/\D/g,"")})}/></label><label>Částka (Kč)<input type="number" min="1" value={invoiceForm.amount} onChange={e=>setInvoiceForm({...invoiceForm,amount:e.target.value})}/></label><label>Splatnost<input type="date" value={invoiceForm.dueOn} onChange={e=>setInvoiceForm({...invoiceForm,dueOn:e.target.value})}/></label><label className="wide">Poznámka<textarea value={invoiceForm.note} onChange={e=>setInvoiceForm({...invoiceForm,note:e.target.value})}/></label>
+    </div><button className="primary" disabled={financeBusy} onClick={()=>void saveInvoice()}><Plus/> Založit fakturu</button></section>
+    <div className="claims-table"><table><thead><tr><th>Číslo</th><th>Dodavatel</th><th>Účet</th><th>VS</th><th>Částka</th><th>Splatnost</th><th>Stav</th><th>Dávka</th></tr></thead><tbody>{invoices.map(i=><tr key={i.id}><td>{i.number}</td><td>{i.supplier}</td><td>{i.account}</td><td>{i.variableSymbol}</td><td>{displayCurrency(i.amount)}</td><td>{displayDate(i.dueOn)}</td><td>{i.status}</td><td>{i.batchId??"—"}</td></tr>)}{!invoices.length&&<tr><td colSpan={8} className="empty-row">Kniha faktur je prázdná.</td></tr>}</tbody></table></div>
+  </div></Shell>;
+
+  if (screen === "Sestavy a exporty") {
+    const reportKinds = [
+      ["insurer", "Přehled pro pojišťovnu"], ["oc", "Sestava OC"], ["zo", "Sestava ZO"],
+      ["claims", "Pojistné události / HVP"], ["starts", "Počátky pojištění"], ["terminations", "Ukončení pojištění"],
+      ["contacts", "Kontaktní seznam"], ["duplicates", "Kontrola duplicit"], ["quality", "Kontrola kvality dat"],
+      ["member", "Parametrická sestava člena"],
+    ];
+    return <Shell {...shellUpdater} active="Sestavy a exporty" user={user} onNavigate={navigate} onLogout={leaveToLogin}>
+      <div className="page">
+        <header className="page-header"><div><small>Výstupy</small><h1>Sestavy a exporty</h1></div></header>
+        {error && <div className="message error">{error}</div>}{notice && <div className="message success">{notice}</div>}
+        <section className="agenda-workspace">
+          <div className="payment-settings-form">
+            <label>Druh sestavy<select value={reportFilter.kind} onChange={(event)=>setReportFilter({...reportFilter,kind:event.target.value})}>{reportKinds.map(([id,label])=><option key={id} value={id}>{label}</option>)}</select></label>
+            <label>Pojistný rok<input type="number" min="1900" max="2999" value={reportFilter.year} onChange={(event)=>setReportFilter({...reportFilter,year:Number(event.target.value)})}/></label>
+            <label>Kód OC<select value={reportFilter.organizationCode} onChange={(event)=>setReportFilter({...reportFilter,organizationCode:event.target.value})}><option value="">Všechny</option><option value="1">OC 1</option><option value="2">OC 2</option></select></label>
+            <label>Základní organizace<input value={reportFilter.organization} onChange={(event)=>setReportFilter({...reportFilter,organization:event.target.value})}/></label>
+            <label>Datum od<input type="date" value={reportFilter.dateFrom} onChange={(event)=>setReportFilter({...reportFilter,dateFrom:event.target.value})}/></label>
+            <label>Datum do<input type="date" value={reportFilter.dateTo} onChange={(event)=>setReportFilter({...reportFilter,dateTo:event.target.value})}/></label>
+            <label>Člen / ev. číslo / rodné číslo<input value={reportFilter.search} onChange={(event)=>setReportFilter({...reportFilter,search:event.target.value})}/></label>
+          </div>
+          <div className="form-actions"><button className="primary" disabled={reportBusy} onClick={()=>void previewOperationalReport()}><Search/> Náhled</button><button disabled={reportBusy} onClick={()=>void exportOperationalReport("pdf")}><FileText/> Export PDF</button><button disabled={reportBusy} onClick={()=>void exportOperationalReport("csv")}><Upload/> Export CSV</button></div>
+        </section>
+        {operationalReport && <section><header className="member-payments-header"><div><h2>{operationalReport.title}</h2><small>{operationalReport.totalRows.toLocaleString("cs-CZ")} řádků</small></div></header><div className="claims-table"><table><thead><tr>{operationalReport.columns.map(column=><th key={column}>{column}</th>)}</tr></thead><tbody>{operationalReport.rows.slice(0,500).map((row,index)=><tr key={index}>{row.map((cell,cellIndex)=><td key={cellIndex}>{cell}</td>)}</tr>)}{operationalReport.rows.length===0&&<tr><td colSpan={operationalReport.columns.length} className="empty-row">Sestava neobsahuje žádné záznamy.</td></tr>}</tbody></table></div>{operationalReport.rows.length>500&&<p>Zobrazeno prvních 500 řádků; export obsahuje všechna data.</p>}</section>}
+      </div>
+    </Shell>;
   }
 
   if (screen === "Nová pojistná událost" && selectedMember && claimForm) {
@@ -2113,7 +2366,7 @@ export default function App() {
                 <label>Telefon<input value={claimForm.phone} onChange={(event) => updateClaim("phone", event.target.value)} /></label>
                 <label>Zaměstnavatel<input value={claimForm.employer} onChange={(event) => updateClaim("employer", event.target.value)} /></label>
                 <label>Povolání<input value={claimForm.occupation} onChange={(event) => updateClaim("occupation", event.target.value)} /></label>
-                <label>Datum vzniku pojistné události<input type="date" value={claimForm.occurredOn} onChange={(event) => updateClaim("occurredOn", event.target.value)} /></label>
+                <label>Datum vzniku pojistné události<input type="date" value={claimForm.occurredOn} onChange={(event) => void resolveClaimInsurance(event.target.value)} /></label>
                 <label>Datum oznámení<input type="date" value={claimForm.reportedOn} onChange={(event) => updateClaim("reportedOn", event.target.value)} /></label>
                 <label>Zjištěná škoda (Kč)<input type="number" min="0" value={claimForm.assessedDamage} onChange={(event) => updateClaim("assessedDamage", event.target.value)} /></label>
                 <label>Pojistné plnění (Kč)<input type="number" min="0" value={claimForm.insuranceBenefit} onChange={(event) => updateClaim("insuranceBenefit", event.target.value)} /></label>
@@ -2128,6 +2381,7 @@ export default function App() {
                   <button className="action-neutral" disabled={claimsLoading} onClick={returnToMemberDetail}><ArrowLeft /> {returnToMember ? "Zrušit a vrátit se na člena" : "Zrušit"}</button>
                 </footer>
               </section>
+              {claimInsuranceMember&&<section className="payment-summary-cards"><div><span>Historický rok</span><strong>{claimForm.occurredOn.slice(0,4)}</strong></div><div><span>Pojistná částka</span><strong>{displayCurrency(claimInsuranceMember.annualPremium)}</strong></div><div><span>Pojistné</span><strong>{displayCurrency(claimInsuranceMember.premium)}</strong></div><div><span>Platnost</span><strong>{displayDate(claimInsuranceMember.insuranceFrom)} – {displayDate(claimInsuranceMember.insuranceTo)}</strong></div></section>}
             </>
           )}
         </div>
@@ -2650,6 +2904,28 @@ export default function App() {
               </tbody></table></div>
             </div>}
           </section>
+          <section className="agenda-workspace">
+            <header className="member-payments-header">
+              <div><small>Pojistná potvrzení</small><h2>Dávkové vytvoření a export</h2></div>
+            </header>
+            <p>Vybere plně uhrazené aktivní členy aktuálního pojistného roku. Filtry lze kombinovat; prázdná hodnota znamená všechny.</p>
+            <div className="payment-settings-form">
+              <label>Úhrada od data<input type="date" value={batchCertificateFilter.paidFrom} onChange={(event) => setBatchCertificateFilter({ ...batchCertificateFilter, paidFrom: event.target.value })} /></label>
+              <label>Kód OC<select value={batchCertificateFilter.organizationCode} onChange={(event) => setBatchCertificateFilter({ ...batchCertificateFilter, organizationCode: event.target.value })}><option value="">Všechny</option><option value="1">OC 1</option><option value="2">OC 2</option></select></label>
+              <label>Základní organizace<input value={batchCertificateFilter.organization} onChange={(event) => setBatchCertificateFilter({ ...batchCertificateFilter, organization: event.target.value })} placeholder="Přesný název ZO" /></label>
+            </div>
+            <div className="form-actions">
+              <button className="primary" disabled={batchCertificateBusy} onClick={() => void createCertificateBatch()}><Plus /> Vytvořit dávku</button>
+              <button disabled={batchCertificateBusy || !batchCertificateResult?.receiptIds.length} onClick={() => void exportCertificateBatch()}><Upload /> Exportovat dávku PDF</button>
+            </div>
+            {batchCertificateResult && <div className="payment-summary-cards">
+              <div><span>Vybráno</span><strong>{batchCertificateResult.selected}</strong></div>
+              <div><span>Nově vytvořeno</span><strong>{batchCertificateResult.created}</strong></div>
+              <div><span>Již existovalo</span><strong>{batchCertificateResult.existing}</strong></div>
+              <div><span>Chyby</span><strong>{batchCertificateResult.errors.length}</strong></div>
+            </div>}
+            {batchCertificateResult?.errors.length ? <details><summary>Zobrazit chyby dávky</summary><ul>{batchCertificateResult.errors.map((item) => <li key={item}>{item}</li>)}</ul></details> : null}
+          </section>
           <h2>Vystavené doklady</h2>
           <form className="search-bar" onSubmit={(event) => { event.preventDefault(); void loadReceipts(undefined, receiptSearch); }}>
             <Search /><input value={receiptSearch} onChange={(event) => setReceiptSearch(event.target.value)} placeholder="Jméno, evidenční číslo, rok nebo e-mail" />
@@ -2704,8 +2980,13 @@ export default function App() {
                   {role === "Správce" && (
                     <>
                       <button className="action-edit" title="Upravit členské údaje" aria-label="Upravit člena" onClick={() => startMemberEdit(selectedMember)}><Pencil /> Upravit člena</button>
+                      <button className="action-neutral" title="Řízeně ukončit aktuální pojištění" onClick={() => void deactivateMember(selectedMember)}><Archive /> Stornovat pojištění</button>
                       <button className="action-claim" title="Založit nový případ pojistné události" aria-label="Nová pojistná událost" onClick={() => openClaimForMember(selectedMember)}><Plus /> Nová pojistná událost</button>
                       <button className="action-payment" title="Připravit příkaz k úhradě" aria-label="Vygenerovat příkaz k úhradě" onClick={() => openPaymentForMember(selectedMember)}><CreditCard /> Příkaz k úhradě</button>
+                      <button className="action-neutral" onClick={()=>void exportMemberDocument(selectedMember,"application")}><FileText/> Přihláška</button>
+                      <button className="action-neutral" onClick={()=>void exportMemberDocument(selectedMember,"voucher")}><FileText/> Poukázka</button>
+                      <button className="action-neutral" onClick={()=>void exportMemberDocument(selectedMember,"envelope")}><Mail/> Obálka</button>
+                      <button className="action-neutral" onClick={()=>void exportMemberDocument(selectedMember,"label")}><FileText/> Štítek</button>
                     </>
                   )}
                   <button className="action-neutral action-back" title="Vrátit se na seznam pojištěnců" aria-label="Zpět na seznam" onClick={closeMemberDetail}><ArrowLeft /> Zpět na seznam</button>
@@ -2735,6 +3016,7 @@ export default function App() {
                     <label>PSČ<input value={memberEdit.postalCode} onChange={(event) => setMemberEdit({ ...memberEdit, postalCode: formatPostalCode(event.target.value) })} /></label>
                     <label>Stát<input value={memberEdit.country} onChange={(event) => setMemberEdit({ ...memberEdit, country: event.target.value })} /></label>
                     <label>E-mail<input type="email" value={memberEdit.email} onChange={(event) => setMemberEdit({ ...memberEdit, email: event.target.value })} /></label>
+                    <label>Telefon<input type="tel" value={memberEdit.phone} onChange={(event) => setMemberEdit({ ...memberEdit, phone: event.target.value })} /></label>
                     <label>Skutečně uhrazeno (Kč)<input type="number" value={memberEdit.actualPayment ?? ""} onChange={(event) => setMemberEdit({ ...memberEdit, actualPayment: event.target.value ? Number(event.target.value) : null })} /></label>
                     <label>Skutečné ukončení<input type="date" value={memberEdit.actualTermination} onChange={(event) => setMemberEdit({ ...memberEdit, actualTermination: event.target.value })} /></label>
                     <label className="wide">Poznámka<textarea value={memberEdit.note} onChange={(event) => setMemberEdit({ ...memberEdit, note: event.target.value })} /></label>
@@ -2795,13 +3077,13 @@ export default function App() {
                   )}
                   <div className="claims-table">
                     <table>
-                      <thead><tr><th>Datum přijetí</th><th>Částka</th><th>Pojistný rok</th><th>Způsob úhrady</th><th>Variabilní symbol</th><th>Poznámka</th><th>Stav</th><th>Akce</th></tr></thead>
+                      <thead><tr><th>Datum přijetí</th><th>Částka</th><th>Pojistný rok</th><th>Zdroj</th><th>Způsob úhrady</th><th>Variabilní symbol</th><th>Poznámka</th><th>Stav</th><th>Akce</th></tr></thead>
                       <tbody>
                         {memberPayments.map((payment) => <tr key={payment.id}>
-                          <td>{displayDate(payment.receivedOn)}</td><td>{displayCurrency(payment.amount)}</td><td>{payment.insuranceYear}</td><td>{payment.method}</td><td>{payment.variableSymbol}</td><td>{display(payment.note)}</td><td>{payment.status}</td>
-                          <td className="row-actions"><button title="Upravit platbu" onClick={() => editMemberPayment(selectedMember, payment)}><Pencil /></button><button title="Odstranit platbu" onClick={() => removeMemberPayment(payment)}><CircleX /></button></td>
+                          <td>{displayDate(payment.receivedOn)}</td><td>{displayCurrency(payment.amount)}</td><td>{payment.insuranceYear}</td><td>{payment.paymentType==="Organizace"?`Zaplaceno organizací ${payment.organization}`:"Jednotlivec"}</td><td>{payment.method}</td><td>{payment.variableSymbol}</td><td>{display(payment.note)}</td><td>{payment.status}</td>
+                          <td className="row-actions">{payment.paymentType==="Jednotlivec"&&<><button title="Upravit platbu" onClick={() => editMemberPayment(selectedMember, payment)}><Pencil /></button><button title="Odstranit platbu" onClick={() => removeMemberPayment(payment)}><CircleX /></button></>}</td>
                         </tr>)}
-                        {memberPayments.length === 0 && <tr><td colSpan={8} className="empty-row">Člen zatím nemá evidovanou platbu.</td></tr>}
+                        {memberPayments.length === 0 && <tr><td colSpan={9} className="empty-row">Člen zatím nemá evidovanou platbu.</td></tr>}
                       </tbody>
                     </table>
                   </div>
@@ -3222,6 +3504,10 @@ export default function App() {
               value={form.email}
               onChange={(event) => update("email", event.target.value)}
             />
+          </label>
+          <label>
+            Telefon
+            <input type="tel" value={form.phone} onChange={(event) => update("phone", event.target.value)} placeholder="+420 123 456 789" />
           </label>
 
           <div className="calculation wide">

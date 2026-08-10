@@ -15,6 +15,9 @@ pub struct MemberPayment {
     pub status: String,
     pub imported_from_bank: bool,
     pub bank_transaction_id: Option<String>,
+    pub payment_type: String,
+    pub organization_payment_id: Option<i64>,
+    pub organization: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -57,7 +60,19 @@ pub fn ensure_schema(connection: &Connection) -> rusqlite::Result<()> {
             "Castka" INTEGER NOT NULL,
             "Operace" TEXT NOT NULL
         );"#,
-    )
+    )?;
+    let has_parent = connection
+        .prepare(r#"PRAGMA table_info("PlatbyClenu")"#)?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|name| name == "OrganizacniPlatbaId");
+    if !has_parent {
+        connection.execute(
+            r#"ALTER TABLE "PlatbyClenu" ADD COLUMN "OrganizacniPlatbaId" INTEGER"#,
+            [],
+        )?;
+    }
+    Ok(())
 }
 
 pub fn bootstrap_legacy_payment(
@@ -91,10 +106,12 @@ pub fn bootstrap_legacy_payment(
 
 pub fn list(connection: &Connection, row_id: i64) -> rusqlite::Result<Vec<MemberPayment>> {
     let mut statement = connection.prepare(
-        r#"SELECT "Id", "DatumPrijeti", "Castka", "PojistnyRok", "ZpusobUhrady",
-                  "VariabilniSymbol", "Poznamka", "Stav", "ImportovanoZBanky", "IdBankovniTransakce"
-           FROM "PlatbyClenu" WHERE "PojistnyZaznamRowId" = ?1
-           ORDER BY "DatumPrijeti" DESC, "Id" DESC"#,
+        r#"SELECT p."Id", p."DatumPrijeti", p."Castka", p."PojistnyRok", p."ZpusobUhrady",
+                  p."VariabilniSymbol", p."Poznamka", p."Stav", p."ImportovanoZBanky", p."IdBankovniTransakce",
+                  p."OrganizacniPlatbaId", o."Organizace"
+           FROM "PlatbyClenu" p LEFT JOIN "OrganizacniPlatby" o ON o."Id"=p."OrganizacniPlatbaId"
+           WHERE p."PojistnyZaznamRowId" = ?1
+           ORDER BY p."DatumPrijeti" DESC, p."Id" DESC"#,
     )?;
     let payments = statement
         .query_map([row_id], |row| {
@@ -109,6 +126,13 @@ pub fn list(connection: &Connection, row_id: i64) -> rusqlite::Result<Vec<Member
                 status: row.get(7)?,
                 imported_from_bank: row.get::<_, i64>(8)? != 0,
                 bank_transaction_id: row.get(9)?,
+                payment_type: if row.get::<_, Option<i64>>(10)?.is_some() {
+                    "Organizace".into()
+                } else {
+                    "Jednotlivec".into()
+                },
+                organization_payment_id: row.get(10)?,
+                organization: row.get(11)?,
             })
         })?
         .collect();
@@ -149,6 +173,8 @@ pub fn save(
     let mut connection =
         Connection::open(database).map_err(|_| "Platbu se nepodařilo uložit.".to_string())?;
     ensure_schema(&connection).map_err(|_| "Platbu se nepodařilo uložit.".to_string())?;
+    crate::organization_payments::ensure_schema(&connection)
+        .map_err(|_| "Platbu se nepodařilo uložit.".to_string())?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|_| "Platbu se nepodařilo uložit.".to_string())?;
@@ -205,6 +231,8 @@ pub fn delete(
     let mut connection =
         Connection::open(database).map_err(|_| "Platbu se nepodařilo odstranit.".to_string())?;
     ensure_schema(&connection).map_err(|_| "Platbu se nepodařilo odstranit.".to_string())?;
+    crate::organization_payments::ensure_schema(&connection)
+        .map_err(|_| "Platbu se nepodařilo odstranit.".to_string())?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|_| "Platbu se nepodařilo odstranit.".to_string())?;

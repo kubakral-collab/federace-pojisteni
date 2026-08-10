@@ -7,6 +7,7 @@ Ověřeno z Git tagů a commitů.
 - **v0.19.0:** splatnost, dashboard pojistek po splatnosti a stabilizace dokladů.
 - **v0.20.0:** oprava mapování pojistné částky dokladu.
 - **v0.21.0:** pojistné události, přehled pro pojišťovnu a další stabilizace dokladů.
+- **v0.22.0:** Product Ownerem schválený produkční balík; dokončení provozní parity Accessu (sestavy, finanční dokumenty, import členů a diagnostika), individuální a organizační platby včetně řízeného rozúčtování, historické pojistné údaje událostí, telefon člena a zaokrouhlení poměrného pojistného nahoru.
 
-## Návrh dalšího release
-**Čeká na schválení Product Ownerem; verze neurčena.** Stabilizační balík nad `v0.21.0`: regrese, vizuální kontrola dokladů, SMTP/updater end-to-end, záloha/obnova a migrace. Návrh není sprint ani oprávnění k release. Cyklus: Development → Stabilizace → RC → Produkční release.
+## Aktuální release
+Produkční vydání `v0.22.0` schválil Product Owner dne 2026-08-10. Tag spouští úplné CI testy, podepsaný Windows build, ověření updaterového podpisu a zveřejnění EXE, MSI a `latest.json`.

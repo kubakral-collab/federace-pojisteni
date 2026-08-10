@@ -1,6 +1,6 @@
 # Roadmapa
 
-Aktualizováno 2026-08-02. Jediný zdroj pravdy pro plán vývoje.
+Aktualizováno 2026-08-10. Jediný zdroj pravdy pro plán vývoje.
 
 ## Vize
 Jednoduchá, bezpečná a aktualizovatelná náhrada Accessu pro jednoho správce, zachovávající provozní logiku a omezující ruční práci.
@@ -29,8 +29,39 @@ Ověřeno proti tagům `v0.17.0`–`v0.21.0`, kódu a testům.
 - **M3 Ochrana dat — plánováno:** SQLCipher, šifrované zálohy, zamykání, úplný audit.
 - **M4 Sestavy — plánováno:** OC/ZO/HVP a další provozně schválené výstupy.
 
+## Aktuální sprint
+
+### FED-UDALOSTI-HISTORY-01 — Historické údaje pojištění u pojistných událostí
+
+- **Milestone:** M1 — Stabilizace Core
+- **Stav:** implementováno; build a automatické regrese prošly, čeká na uživatelský smoke test
+- **Priorita:** P1
+- **Scope:** `UDALOSTI-001` — rok události odvodit z data vzniku a použít přesný historický pojistný záznam; při chybějících datech nesmí nastat fallback na aktuální rok.
+- **Navazující sprint:** `FED-CONTACT-CALC-01` je rovněž implementován; telefon je dostupný při založení, editaci i v detailu a poměrné pojistné používá finální zaokrouhlení nahoru.
+
+## Schválený budoucí scope
+
+### UX-001 — Pořadí položek v levém menu
+
+- **Milestone:** M1 — Stabilizace Core
+- **Priorita:** P2
+- **Stav:** schváleno Product Ownerem, čeká na zařazení po aktuálním sprintu
+- **Navržené označení sprintu:** `FEDERACE-MENU-01`
+- **Scope:** umístit „Nový pojištěnec“ bezprostředně nad „Seznam pojištěnců“ a zachovat vzájemné pořadí všech ostatních položek.
+- **Mimo scope:** změny názvů, ikon, rout, funkcí modulů, vzhledu sidebaru, přidávání nebo odstraňování modulů a jiné UX úpravy.
+
+### PLATBY-001 — Individuální a organizační platby
+
+- **Milestone:** M2 — Provozní automatizace
+- **Priorita:** P2
+- **Stav:** schváleno Product Ownerem, čeká na zařazení do pořadí sprintů
+- **Navržené označení sprintu:** `FEDERACE-PLATBY-01`
+- **Scope:** umožnit na stránce Platby vytvořit individuální platbu navázanou na člena nebo organizační platbu navázanou na organizaci; evidovat typ platby, zobrazit příslušného člena či organizaci a členy vybrané organizace; zachovat kompatibilitu existujících plateb bezpečnou migrací.
+- **Mimo scope:** automatické rozúčtování organizační částky mezi členy, změny pojistného, sazeb, dokladů, certifikátů, členů, detailu člena nebo levého menu.
+- **Otevřené rozhodnutí:** pravidla rozúčtování organizační platby vyžadují samostatné schválení Product Ownera; nesmějí být odvozena ani implementována bez něj.
+
 ## Release plán
-Vydané verze jsou v [RELEASES.md](RELEASES.md). **Navrhovaný další stabilizační release (verze neurčena) čeká na schválení Product Ownerem:** regresní a vizuální testy dokladů, SMTP, updateru, záloh a migrací. Návrh není schválený sprint ani oprávnění k vydání.
+Vydané verze jsou v [RELEASES.md](RELEASES.md). **Produkční release `v0.22.0` byl dne 2026-08-10 výslovně schválen Product Ownerem.** Balík zahrnuje dokončení provozní parity Accessu, individuální a organizační platby, historické údaje pojistných událostí, telefon člena a opravu zaokrouhlování poměrného pojistného. Publikace probíhá standardním podepsaným GitHub Actions workflow s testy, EXE/MSI a manifestem Tauri Updateru.
 
 Aktivní položky jsou v [BACKLOG.md](BACKLOG.md), neschválené náměty v [PARKING_LOT.md](PARKING_LOT.md).
 

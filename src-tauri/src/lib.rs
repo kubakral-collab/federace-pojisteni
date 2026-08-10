@@ -2,9 +2,13 @@ mod claims;
 mod current_insurance_year;
 mod database_backup;
 mod email_service;
+mod financial_documents;
+mod member_import;
 mod member_payments;
+mod organization_payments;
 mod payments;
 mod receipts;
+mod reports;
 mod tariffs;
 
 use argon2::{
@@ -86,6 +90,7 @@ struct NewInsured {
     code: i64,
     registration_year: i32,
     email: Option<String>,
+    phone: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -105,6 +110,7 @@ struct MemberUpdate {
     affiliation: String,
     code: String,
     email: Option<String>,
+    phone: Option<String>,
     note: Option<String>,
     actual_payment: Option<i64>,
     actual_termination: Option<String>,
@@ -145,6 +151,7 @@ struct MemberRow {
     country: Option<String>,
     organization: Option<String>,
     email: Option<String>,
+    phone: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -195,6 +202,48 @@ struct DashboardInfo {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct InsurerOverview {
+    insurance_year: i32,
+    members: Vec<MemberRow>,
+    total_premium: i64,
+    total_paid: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BatchCertificateFilter {
+    paid_from: Option<String>,
+    organization_code: Option<String>,
+    organization: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BatchCertificateResult {
+    selected: usize,
+    created: usize,
+    existing: usize,
+    skipped: usize,
+    errors: Vec<String>,
+    receipt_ids: Vec<i64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SystemDiagnostics {
+    database_path: String,
+    integrity: String,
+    application_version: String,
+    active_year: i32,
+    members: i64,
+    claims: i64,
+    receipts: i64,
+    invoices: i64,
+    backups: i64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct AuditEntry {
     occurred_at: String,
     user: String,
@@ -227,7 +276,8 @@ const MEMBER_SELECT: &str = r#"SELECT
     CAST("PSČ" AS TEXT),
     CAST("Stát" AS TEXT),
     CAST("ZO" AS TEXT),
-    CAST("e-mail" AS TEXT)
+    CAST("e-mail" AS TEXT),
+    CAST("Telefon" AS TEXT)
 FROM "Seznam""#;
 
 #[cfg(test)]
@@ -366,14 +416,35 @@ fn open_write(path: &Path) -> Result<Connection, String> {
 
 fn ensure_current_insurance_year(path: &Path) -> Result<i32, String> {
     let mut connection = open_write(path)?;
+    ensure_member_contact_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
     tariffs::ensure_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
     payments::ensure_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
     payments::ensure_order_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
     member_payments::ensure_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
+    organization_payments::ensure_schema(&connection)
+        .map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
     claims::ensure_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
     email_service::ensure_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
     receipts::ensure_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
     CurrentInsuranceYear::initialize(&mut connection, path, Local::now().year())
+}
+
+fn ensure_member_contact_schema(connection: &Connection) -> rusqlite::Result<()> {
+    for table in ["Seznam", "Editace"] {
+        let sql = format!(r#"PRAGMA table_info("{table}")"#);
+        let has_phone = connection
+            .prepare(&sql)?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .filter_map(Result::ok)
+            .any(|name| name == "Telefon");
+        if !has_phone {
+            connection.execute(
+                &format!(r#"ALTER TABLE "{table}" ADD COLUMN "Telefon" TEXT"#),
+                [],
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn authenticated_user(state: &State<'_, AppState>) -> Result<String, String> {
@@ -569,6 +640,7 @@ fn map_member(row: &Row<'_>) -> rusqlite::Result<MemberRow> {
         country: row.get(22)?,
         organization: row.get(23)?,
         email: row.get(24)?,
+        phone: row.get(25)?,
     })
 }
 
@@ -585,6 +657,44 @@ fn current_member_record(
         params![row_id, active_year],
         map_member,
     )
+}
+
+fn claim_member_record(
+    connection: &Connection,
+    selected_row_id: i64,
+    occurred_on: &str,
+) -> Result<(MemberRow, i32), String> {
+    let date = NaiveDate::parse_from_str(occurred_on.trim(), "%Y-%m-%d")
+        .map_err(|_| "Vyplňte platné datum vzniku pojistné události.".to_string())?;
+    let year = date.year();
+    let personal_id: String = connection
+        .query_row(
+            r#"SELECT TRIM(COALESCE("RodnéČíslo",'')) FROM "Seznam" WHERE rowid=?1"#,
+            [selected_row_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| "Vybraný pojištěnec nebyl nalezen.".to_string())?;
+    if personal_id.is_empty() {
+        return Err("Historické pojištění nelze dohledat: člen nemá rodné číslo.".into());
+    }
+    let member = connection.query_row(
+        &format!(r#"{MEMBER_SELECT} WHERE TRIM("RodnéČíslo")=?1 AND pojisteni_rok("PojištěníOd")=?2 ORDER BY rowid DESC LIMIT 1"#),
+        params![personal_id, year], map_member,
+    ).map_err(|_| format!("Historické údaje pojištění pro rok {year} nejsou dostupné."))?;
+    Ok((member, year))
+}
+
+#[tauri::command]
+fn resolve_claim_insurance(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    row_id: i64,
+    occurred_on: String,
+) -> Result<MemberRow, String> {
+    authenticated_user(&state)?;
+    let path = working_database_path(&app)?;
+    ensure_current_insurance_year(&path)?;
+    claim_member_record(&open_read_only(&path)?, row_id, &occurred_on).map(|result| result.0)
 }
 
 fn member_history_records(
@@ -628,6 +738,7 @@ fn update_current_member_record(
     }
     let termination = parse_date(&member.actual_termination)?;
     let mut connection = open_write(path)?;
+    ensure_member_contact_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
     ensure_backup(&connection, path)?;
     let result = (|| -> rusqlite::Result<()> {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -643,8 +754,8 @@ fn update_current_member_record(
                    "Titul" = ?1, "Příjmení" = ?2, "Jméno" = ?3, "RodnéČíslo" = ?4,
                    "EvČíslo" = ?5, "Město" = ?6, "Adresa" = ?7, "PSČ" = ?8,
                    "Stát" = ?9, "ZO" = ?10, "OdbPříslušnost" = ?11, "KódOC" = ?12,
-                   "e-mail" = ?13, "Poznámka" = ?14, "SkutÚhrada" = ?15, "Ukončení" = ?16
-               WHERE rowid = ?17 AND pojisteni_rok("PojištěníOd") = ?18"#,
+                   "e-mail" = ?13, "Telefon" = ?14, "Poznámka" = ?15, "SkutÚhrada" = ?16, "Ukončení" = ?17
+               WHERE rowid = ?18 AND pojisteni_rok("PojištěníOd") = ?19"#,
             params![
                 clean_optional(member.title),
                 clean_optional(member.last_name),
@@ -659,6 +770,7 @@ fn update_current_member_record(
                 member.affiliation,
                 member.code,
                 clean_optional(member.email),
+                clean_optional(member.phone),
                 clean_optional(member.note),
                 member.actual_payment.unwrap_or(0),
                 sqlite_date(termination),
@@ -847,6 +959,7 @@ fn save_to_database(path: &Path, user: &str, input: NewInsured) -> Result<SaveRe
     let (insurance_from, insurance_to) = validate_input(&input)?;
     let months = access_month_count(insurance_from, insurance_to);
     let mut connection = open_write(path)?;
+    ensure_member_contact_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
     tariffs::ensure_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
     let tariff_date = insurance_from
         .or_else(|| NaiveDate::from_ymd_opt(input.registration_year, 1, 1))
@@ -874,10 +987,10 @@ fn save_to_database(path: &Path, user: &str, input: NewInsured) -> Result<SaveRe
                 "Titul", "Příjmení", "Jméno", "RodnéČíslo", "ZO", "OdbPříslušnost",
                 "Město", "Adresa", "PSČ", "Stát", "Poznámka", "PojištěníOd",
                 "PojištěníDo", "RočPojistné", "Kategorie", "Ztráta",
-                "PojistnáČástka", "SkutÚhrada", "KódOC", "EvČíslo", "E-mail"
+                "PojistnáČástka", "SkutÚhrada", "KódOC", "EvČíslo", "E-mail", "Telefon"
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21
+                ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22
             )"#,
             params![
                 clean_optional(input.title),
@@ -901,6 +1014,7 @@ fn save_to_database(path: &Path, user: &str, input: NewInsured) -> Result<SaveRe
                 input.code.to_string(),
                 registration_number,
                 clean_optional(input.email),
+                clean_optional(input.phone),
             ],
         )?;
 
@@ -911,13 +1025,13 @@ fn save_to_database(path: &Path, user: &str, input: NewInsured) -> Result<SaveRe
                 "PojistnáČástka", "Kategorie", "Ztráta", "KódOC", "EvČíslo",
                 "Titul", "Příjmení", "Jméno", "RodnéČíslo", "Město", "Adresa",
                 "PSČ", "Stát", "Poznámka", "OdbPříslušnost", "ZO", "SkutÚhrada",
-                "e-mail", "Tisk"
+                "e-mail", "Telefon", "Tisk"
             )
             SELECT
                 ?1, "PojištěníOd", "PojištěníDo", "RočPojistné", "PojistnáČástka",
                 "Kategorie", "Ztráta", "KódOC", "EvČíslo", "Titul", "Příjmení",
                 "Jméno", "RodnéČíslo", "Město", "Adresa", "PSČ", "Stát",
-                "Poznámka", "OdbPříslušnost", "ZO", "SkutÚhrada", "E-mail", 0
+                "Poznámka", "OdbPříslušnost", "ZO", "SkutÚhrada", "E-mail", "Telefon", 0
             FROM "Editace""#,
             [identifier],
         )?;
@@ -1245,6 +1359,44 @@ fn update_current_member(
 }
 
 #[tauri::command]
+fn deactivate_current_member(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    row_id: i64,
+    reason: String,
+) -> Result<(), String> {
+    let user = require_admin(&state)?;
+    let reason = reason.trim();
+    if reason.len() < 5 {
+        return Err("Uveďte důvod storna alespoň pěti znaky.".into());
+    }
+    let path = working_database_path(&app)?;
+    let active_year = ensure_current_insurance_year(&path)?;
+    deactivate_current_member_at(&path, &user, active_year, row_id, reason)
+}
+
+fn deactivate_current_member_at(
+    path: &Path,
+    user: &str,
+    active_year: i32,
+    row_id: i64,
+    reason: &str,
+) -> Result<(), String> {
+    let mut connection = open_write(&path)?;
+    create_audit_table(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|_| "Storno se nepodařilo zahájit.".to_string())?;
+    let identifier: String=transaction.query_row(r#"SELECT COALESCE(CAST("Identifikátor" AS TEXT),CAST(rowid AS TEXT)) FROM "Seznam" WHERE rowid=?1 AND pojisteni_rok("PojištěníOd")=?2 AND NULLIF(TRIM("Ukončení"),'') IS NULL"#,params![row_id,active_year],|row|row.get(0)).map_err(|_|"Aktuální aktivní záznam nebyl nalezen.".to_string())?;
+    let today = Local::now().date_naive().format("%Y-%m-%d").to_string();
+    transaction.execute(r#"UPDATE "Seznam" SET "Ukončení"=?1,"Poznámka"=TRIM(COALESCE("Poznámka",'') || CASE WHEN NULLIF(TRIM(COALESCE("Poznámka",'')),'') IS NULL THEN '' ELSE char(10) END || 'STORNO: ' || ?2) WHERE rowid=?3"#,params![today,reason,row_id]).map_err(|_|"Záznam se nepodařilo stornovat.".to_string())?;
+    transaction.execute(r#"INSERT INTO "AuditLog"("DatumČas","Uživatel","IdentifikátorPojištěnce","Operace","Výsledek") VALUES(CURRENT_TIMESTAMP,?1,?2,'DEACTIVATE','OK')"#,params![user,identifier]).map_err(|_|"Storno se nepodařilo zaznamenat.".to_string())?;
+    transaction
+        .commit()
+        .map_err(|_| "Storno se nepodařilo uložit.".to_string())
+}
+
+#[tauri::command]
 fn list_archive_years(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -1323,6 +1475,56 @@ fn get_dashboard(app: AppHandle, state: State<'_, AppState>) -> Result<Dashboard
         overdue_count,
         overdue_amount,
         oldest_due_date,
+    })
+}
+
+#[tauri::command]
+fn get_insurer_overview(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    selection: String,
+) -> Result<InsurerOverview, String> {
+    authenticated_user(&state)?;
+    let path = working_database_path(&app)?;
+    let insurance_year = ensure_current_insurance_year(&path)?;
+    let connection = open_read_only(&path)?;
+    let condition = match selection.as_str() {
+        "new" => {
+            r#"pojisteni_rok(\"PojištěníOd\") = ?1 AND NULLIF(TRIM(\"Ukončení\"), '') IS NULL AND COALESCE(\"SkutÚhrada\", 0) > 0"#
+        }
+        "terminated" => r#"pojisteni_rok(\"Ukončení\") = ?1 AND COALESCE(\"SkutÚhrada\", 0) > 0"#,
+        "underpaid" => {
+            r#"pojisteni_rok(\"PojištěníOd\") = ?1 AND NULLIF(TRIM(\"Ukončení\"), '') IS NULL AND COALESCE(\"SkutÚhrada\", 0) < COALESCE(\"PojistnáČástka\", 0)"#
+        }
+        "oc1" => {
+            r#"pojisteni_rok(\"PojištěníOd\") = ?1 AND CAST(\"KódOC\" AS TEXT) = '1' AND NULLIF(TRIM(\"Ukončení\"), '') IS NULL AND COALESCE(\"SkutÚhrada\", 0) > 0"#
+        }
+        "oc2" => {
+            r#"pojisteni_rok(\"PojištěníOd\") = ?1 AND CAST(\"KódOC\" AS TEXT) = '2' AND NULLIF(TRIM(\"Ukončení\"), '') IS NULL AND COALESCE(\"SkutÚhrada\", 0) > 0"#
+        }
+        _ => return Err("Zvolený přehled není podporován.".to_string()),
+    };
+    let sql = format!(
+        "{MEMBER_SELECT} WHERE {condition} ORDER BY CAST(\"EvČíslo\" AS INTEGER), \"Příjmení\""
+    );
+    let mut statement = connection
+        .prepare(&sql)
+        .map_err(|_| "Přehled pro pojišťovnu se nepodařilo načíst.".to_string())?;
+    let members = statement
+        .query_map([insurance_year], map_member)
+        .map_err(|_| "Přehled pro pojišťovnu se nepodařilo načíst.".to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| "Přehled pro pojišťovnu se nepodařilo načíst.".to_string())?;
+    let total_premium = members.iter().map(|member| number(&member.premium)).sum();
+    let total_paid = members
+        .iter()
+        .map(|member| number(&member.actual_payment))
+        .sum();
+    Ok(InsurerOverview {
+        insurance_year,
+        members,
+        total_premium,
+        total_paid,
     })
 }
 
@@ -1539,6 +1741,63 @@ fn save_member_payment(
 }
 
 #[tauri::command]
+fn list_payment_organizations(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    year: i32,
+) -> Result<Vec<organization_payments::OrganizationOption>, String> {
+    authenticated_user(&state)?;
+    let c = open_write(&working_database_path(&app)?)?;
+    organization_payments::ensure_schema(&c).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
+    organization_payments::organizations(&c, year)
+        .map_err(|_| "Organizace se nepodařilo načíst.".into())
+}
+#[tauri::command]
+fn list_organization_payment_members(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    organization: String,
+    year: i32,
+) -> Result<Vec<organization_payments::OrganizationMember>, String> {
+    authenticated_user(&state)?;
+    organization_payments::members(
+        &open_read_only(&working_database_path(&app)?)?,
+        &organization,
+        year,
+    )
+    .map_err(|_| "Členy organizace se nepodařilo načíst.".into())
+}
+#[tauri::command]
+fn save_organization_payment(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    payment: organization_payments::OrganizationPaymentInput,
+) -> Result<i64, String> {
+    authenticated_user(&state)?;
+    organization_payments::save(&working_database_path(&app)?, payment)
+}
+#[tauri::command]
+fn list_organization_payments(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<organization_payments::OrganizationPayment>, String> {
+    authenticated_user(&state)?;
+    let c = open_write(&working_database_path(&app)?)?;
+    organization_payments::ensure_schema(&c).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
+    organization_payments::list(&c).map_err(|_| "Organizační platby se nepodařilo načíst.".into())
+}
+#[tauri::command]
+fn get_organization_payment(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<organization_payments::OrganizationPaymentDetail, String> {
+    authenticated_user(&state)?;
+    organization_payments::detail(&open_read_only(&working_database_path(&app)?)?, id)
+        .map_err(|_| "Detail organizační platby se nepodařilo načíst.".into())
+}
+
+#[tauri::command]
 fn get_email_settings(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -1606,6 +1865,105 @@ fn create_receipt(
     let path = working_database_path(&app)?;
     let year = ensure_current_insurance_year(&path)?;
     receipts::create_if_eligible(&path, &user, row_id, year, false)
+}
+
+#[tauri::command]
+fn create_certificate_batch(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    filter: BatchCertificateFilter,
+) -> Result<BatchCertificateResult, String> {
+    let user = require_admin(&state)?;
+    let path = working_database_path(&app)?;
+    let year = ensure_current_insurance_year(&path)?;
+    let connection = open_write(&path)?;
+    receipts::ensure_schema(&connection)
+        .map_err(|_| "Dávku potvrzení se nepodařilo připravit.".to_string())?;
+    let paid_from = filter.paid_from.unwrap_or_default();
+    let organization_code = filter.organization_code.unwrap_or_default();
+    let organization = filter.organization.unwrap_or_default();
+    let mut statement = connection
+        .prepare(
+            r#"SELECT member.rowid
+               FROM "Seznam" member
+               WHERE pojisteni_rok(member."PojištěníOd") = ?1
+                 AND NULLIF(TRIM(member."Ukončení"), '') IS NULL
+                 AND COALESCE((SELECT SUM(payment."Castka") FROM "PlatbyClenu" payment
+                               WHERE payment."PojistnyZaznamRowId" = member.rowid),
+                              COALESCE(member."SkutÚhrada", 0)) >= COALESCE(member."PojistnáČástka", 0)
+                 AND (?2 = '' OR EXISTS (SELECT 1 FROM "PlatbyClenu" payment
+                                          WHERE payment."PojistnyZaznamRowId" = member.rowid
+                                            AND date(payment."DatumPrijeti") >= date(?2)))
+                 AND (?3 = '' OR CAST(member."KódOC" AS TEXT) = ?3)
+                 AND (?4 = '' OR member."ZO" = ?4)
+               ORDER BY CAST(member."EvČíslo" AS INTEGER), member."Příjmení", member."Jméno""#,
+        )
+        .map_err(|_| "Dávku potvrzení se nepodařilo připravit.".to_string())?;
+    let row_ids = statement
+        .query_map(
+            params![year, paid_from, organization_code, organization],
+            |row| row.get::<_, i64>(0),
+        )
+        .and_then(|rows| rows.collect::<rusqlite::Result<Vec<_>>>())
+        .map_err(|_| "Dávku potvrzení se nepodařilo připravit.".to_string())?;
+    drop(statement);
+    drop(connection);
+
+    let mut result = BatchCertificateResult {
+        selected: row_ids.len(),
+        created: 0,
+        existing: 0,
+        skipped: 0,
+        errors: Vec::new(),
+        receipt_ids: Vec::new(),
+    };
+    for row_id in row_ids {
+        let before = open_write(&path)?.query_row(
+            r#"SELECT COUNT(*) FROM "DokladyOUhrade" WHERE "PojistnyZaznamRowId"=?1 AND "PojistnyRok"=?2"#,
+            params![row_id, year],
+            |row| row.get::<_, i64>(0),
+        ).unwrap_or(0);
+        match receipts::create_if_eligible(&path, &user, row_id, year, false) {
+            Ok(Some(id)) => {
+                if before > 0 {
+                    result.existing += 1;
+                } else {
+                    result.created += 1;
+                }
+                result.receipt_ids.push(id);
+            }
+            Ok(None) => result.skipped += 1,
+            Err(error) => result.errors.push(format!("Záznam {row_id}: {error}")),
+        }
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+fn export_certificate_batch(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    receipt_ids: Vec<i64>,
+) -> Result<Option<String>, String> {
+    let user = authenticated_user(&state)?;
+    if receipt_ids.is_empty() {
+        return Err("Nejprve vytvořte nebo vyberte dávku potvrzení.".into());
+    }
+    let Some(directory) = rfd::FileDialog::new()
+        .set_title("Vybrat složku pro pojistná potvrzení")
+        .pick_folder()
+    else {
+        return Ok(None);
+    };
+    let path = working_database_path(&app)?;
+    let connection = open_write(&path)?;
+    for id in receipt_ids {
+        let (name, bytes) = receipts::pdf(&connection, id)?;
+        fs::write(directory.join(&name), bytes)
+            .map_err(|_| format!("Soubor {name} se nepodařilo uložit."))?;
+        connection.execute(r#"INSERT INTO "AuditDokladu"("Uzivatel","IdDokladu","IdentifikatorClena","Operace","Vysledek") SELECT ?1,"Id","IdentifikatorClena",'DÁVKOVÝ EXPORT PDF','OK' FROM "DokladyOUhrade" WHERE "Id"=?2"#,params![user,id]).ok();
+    }
+    Ok(Some(directory.to_string_lossy().into_owned()))
 }
 
 #[tauri::command]
@@ -1822,6 +2180,239 @@ fn open_generated_pdf(
 }
 
 #[tauri::command]
+fn preview_operational_report(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    filter: reports::ReportFilter,
+) -> Result<reports::ReportPreview, String> {
+    authenticated_user(&state)?;
+    let path = working_database_path(&app)?;
+    ensure_current_insurance_year(&path)?;
+    reports::preview(&open_write(&path)?, &filter)
+}
+
+#[tauri::command]
+fn export_operational_report(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    filter: reports::ReportFilter,
+    format: String,
+) -> Result<Option<String>, String> {
+    let user = authenticated_user(&state)?;
+    if format != "csv" && format != "pdf" {
+        return Err("Nepodporovaný formát sestavy.".into());
+    }
+    let path = working_database_path(&app)?;
+    ensure_current_insurance_year(&path)?;
+    let connection = open_write(&path)?;
+    let report = reports::preview(&connection, &filter)?;
+    let safe_title =
+        deunicode::deunicode(&report.title).replace(|c: char| !c.is_ascii_alphanumeric(), "_");
+    let filename = format!(
+        "{}_{}.{}",
+        safe_title.trim_matches('_'),
+        filter.year,
+        format
+    );
+    let Some(destination) = rfd::FileDialog::new()
+        .set_title("Uložit sestavu")
+        .set_file_name(&filename)
+        .add_filter(
+            if format == "pdf" {
+                "Dokument PDF"
+            } else {
+                "Tabulka CSV"
+            },
+            &[format.as_str()],
+        )
+        .save_file()
+    else {
+        return Ok(None);
+    };
+    if format == "pdf" {
+        reports::pdf(&report, &destination)?;
+    } else {
+        fs::write(&destination, reports::csv(&report))
+            .map_err(|_| "CSV se nepodařilo uložit.".to_string())?;
+    }
+    reports::audit(&connection, &user, &filter, &format, report.total_rows);
+    Ok(Some(destination.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+fn list_invoices(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<financial_documents::Invoice>, String> {
+    authenticated_user(&state)?;
+    let path = working_database_path(&app)?;
+    financial_documents::list_invoices(&open_write(&path)?)
+}
+
+#[tauri::command]
+fn create_invoice(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    invoice: financial_documents::InvoiceInput,
+) -> Result<i64, String> {
+    let user = require_admin(&state)?;
+    let path = working_database_path(&app)?;
+    financial_documents::create_invoice(&mut open_write(&path)?, &user, invoice)
+}
+
+#[tauri::command]
+fn export_payment_batch(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let user = require_admin(&state)?;
+    let path = working_database_path(&app)?;
+    let mut connection = open_write(&path)?;
+    let batch = financial_documents::prepare_batch(&mut connection, &user)?;
+    let Some(destination) = rfd::FileDialog::new()
+        .set_title("Uložit dávkový příkaz k úhradě")
+        .set_file_name(&format!("platebni-davka-{}.csv", batch.batch_id))
+        .add_filter("Bankovní dávka CSV", &["csv"])
+        .save_file()
+    else {
+        return Ok(None);
+    };
+    if let Err(error) = fs::write(&destination, &batch.bytes) {
+        return Err(format!("Dávku se nepodařilo uložit: {error}"));
+    }
+    financial_documents::finish_batch(&mut connection, &user, batch.batch_id, &destination)?;
+    Ok(Some(destination.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+fn export_member_document(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    row_id: i64,
+    kind: String,
+) -> Result<Option<String>, String> {
+    let user = authenticated_user(&state)?;
+    let path = working_database_path(&app)?;
+    let year = ensure_current_insurance_year(&path)?;
+    let connection = open_write(&path)?;
+    let data = financial_documents::member_data(&connection, row_id, year)?;
+    let label = match kind.as_str() {
+        "application" => "prihlaska",
+        "voucher" => "poukazka",
+        "envelope" => "obalka",
+        "label" => "stitek",
+        _ => return Err("Neznámý typ dokumentu.".into()),
+    };
+    let Some(destination) = rfd::FileDialog::new()
+        .set_title("Uložit dokument")
+        .set_file_name(&format!(
+            "{}_{}_{}.pdf",
+            label, data.year, data.registration
+        ))
+        .add_filter("Dokument PDF", &["pdf"])
+        .save_file()
+    else {
+        return Ok(None);
+    };
+    financial_documents::member_pdf(&data, &kind, &destination)?;
+    let bytes = fs::read(&destination)
+        .map_err(|_| "Vytvořený dokument se nepodařilo ověřit.".to_string())?;
+    financial_documents::record_member_document(
+        &mut open_write(&path)?,
+        &user,
+        &data,
+        &kind,
+        &bytes,
+    )?;
+    Ok(Some(destination.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+fn get_system_diagnostics(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<SystemDiagnostics, String> {
+    require_admin(&state)?;
+    let path = working_database_path(&app)?;
+    let year = ensure_current_insurance_year(&path)?;
+    let connection = open_write(&path)?;
+    financial_documents::ensure_schema(&connection).ok();
+    receipts::ensure_schema(&connection).ok();
+    claims::ensure_schema(&connection).ok();
+    let count = |table: &str| {
+        connection
+            .query_row(&format!("SELECT COUNT(*) FROM \"{table}\""), [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .unwrap_or(0)
+    };
+    let integrity: String = connection
+        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+        .unwrap_or_else(|_| "error".into());
+    let backups = path
+        .parent()
+        .map(|p| p.join("backups"))
+        .and_then(|p| fs::read_dir(p).ok())
+        .map(|x| x.filter_map(Result::ok).count() as i64)
+        .unwrap_or(0);
+    Ok(SystemDiagnostics {
+        database_path: path.to_string_lossy().into_owned(),
+        integrity,
+        application_version: env!("CARGO_PKG_VERSION").into(),
+        active_year: year,
+        members: count("Seznam"),
+        claims: count("PojistneUdalosti"),
+        receipts: count("DokladyOUhrade"),
+        invoices: count("VydaneFaktury"),
+        backups,
+    })
+}
+
+#[tauri::command]
+fn choose_member_import(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<member_import::ImportPreview>, String> {
+    require_admin(&state)?;
+    let Some(source) = rfd::FileDialog::new()
+        .set_title("Vybrat CSV pro import členů")
+        .add_filter("CSV UTF-8", &["csv"])
+        .pick_file()
+    else {
+        return Ok(None);
+    };
+    let path = working_database_path(&app)?;
+    Ok(Some(member_import::preview(
+        &open_read_only(&path)?,
+        &source,
+    )?))
+}
+
+#[tauri::command]
+fn execute_member_import(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    source: String,
+) -> Result<member_import::ImportResult, String> {
+    let user = require_admin(&state)?;
+    let source = PathBuf::from(source);
+    if !source.is_file()
+        || source
+            .extension()
+            .and_then(|v| v.to_str())
+            .unwrap_or_default()
+            .to_lowercase()
+            != "csv"
+    {
+        return Err("Importní soubor není platný.".into());
+    }
+    let path = working_database_path(&app)?;
+    let mut connection = open_write(&path)?;
+    ensure_backup(&connection, &path)?;
+    member_import::execute(&mut connection, &source, &user)
+}
+
+#[tauri::command]
 fn list_member_claims(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -1829,15 +2420,14 @@ fn list_member_claims(
 ) -> Result<Vec<claims::Claim>, String> {
     authenticated_user(&state)?;
     let path = working_database_path(&app)?;
-    let active_year = ensure_current_insurance_year(&path)?;
+    ensure_current_insurance_year(&path)?;
     let connection = open_read_only(&path)?;
-    let member = current_member_record(&connection, row_id, active_year)
-        .map_err(|_| "Pojistné události člena se nepodařilo načíst.".to_string())?;
-    let identifier = member
-        .identifier
-        .as_deref()
-        .unwrap_or_default()
-        .parse::<i64>()
+    let identifier = connection
+        .query_row(
+            r#"SELECT "Identifikátor" FROM "Seznam" WHERE rowid=?1"#,
+            [row_id],
+            |row| row.get::<_, i64>(0),
+        )
         .map_err(|_| "Pojistné události člena se nepodařilo načíst.".to_string())?;
     claims::list_for_member(&connection, identifier)
         .map_err(|_| "Pojistné události člena se nepodařilo načíst.".to_string())
@@ -1936,10 +2526,11 @@ fn create_claim(
 ) -> Result<i64, String> {
     let user = require_admin(&state)?;
     let path = working_database_path(&app)?;
-    let active_year = ensure_current_insurance_year(&path)?;
+    ensure_current_insurance_year(&path)?;
     let connection = open_read_only(&path)?;
-    let member = current_member_record(&connection, claim.insurance_row_id, active_year)
-        .map_err(|_| "Vybraný pojistný záznam není platný.".to_string())?;
+    let occurred_on = claim.occurred_on.as_deref().unwrap_or_default();
+    let (member, claim_year) =
+        claim_member_record(&connection, claim.insurance_row_id, occurred_on)?;
     let identifier = member
         .identifier
         .as_deref()
@@ -1947,7 +2538,9 @@ fn create_claim(
         .parse::<i64>()
         .map_err(|_| "Vybraný člen nemá platný interní identifikátor.".to_string())?;
     drop(connection);
-    claims::create(&path, identifier, active_year, claim, &user)
+    let mut claim = claim;
+    claim.insurance_row_id = member.row_id;
+    claims::create(&path, identifier, claim_year, claim, &user)
 }
 
 #[tauri::command]
@@ -1959,10 +2552,11 @@ fn update_claim(
 ) -> Result<(), String> {
     let user = require_admin(&state)?;
     let path = working_database_path(&app)?;
-    let active_year = ensure_current_insurance_year(&path)?;
+    ensure_current_insurance_year(&path)?;
     let connection = open_read_only(&path)?;
-    let member = current_member_record(&connection, claim.insurance_row_id, active_year)
-        .map_err(|_| "Vybraný pojistný záznam není platný.".to_string())?;
+    let occurred_on = claim.occurred_on.as_deref().unwrap_or_default();
+    let (member, claim_year) =
+        claim_member_record(&connection, claim.insurance_row_id, occurred_on)?;
     let identifier = member
         .identifier
         .as_deref()
@@ -1970,7 +2564,9 @@ fn update_claim(
         .parse::<i64>()
         .map_err(|_| "Vybraný člen nemá platný interní identifikátor.".to_string())?;
     drop(connection);
-    claims::update(&path, id, identifier, active_year, claim, &user)
+    let mut claim = claim;
+    claim.insurance_row_id = member.row_id;
+    claims::update(&path, id, identifier, claim_year, claim, &user)
 }
 
 #[tauri::command]
@@ -2090,9 +2686,11 @@ pub fn run() {
             get_current_member,
             get_member_history,
             update_current_member,
+            deactivate_current_member,
             list_archive_years,
             list_archive_members,
             get_dashboard,
+            get_insurer_overview,
             list_tariff_rates,
             save_tariff_rate,
             get_payment_settings,
@@ -2104,9 +2702,16 @@ pub fn run() {
             prepare_payment_order,
             list_member_payments,
             save_member_payment,
+            list_payment_organizations,
+            list_organization_payment_members,
+            save_organization_payment,
+            list_organization_payments,
+            get_organization_payment,
             delete_member_payment,
             list_receipts,
             create_receipt,
+            create_certificate_batch,
+            export_certificate_batch,
             get_payment_document_basis,
             export_receipt_pdf,
             open_receipt_pdf,
@@ -2114,10 +2719,20 @@ pub fn run() {
             generate_payment_order_pdf,
             audit_payment_order_print,
             open_generated_pdf,
+            preview_operational_report,
+            export_operational_report,
+            list_invoices,
+            create_invoice,
+            export_payment_batch,
+            export_member_document,
+            get_system_diagnostics,
+            choose_member_import,
+            execute_member_import,
             list_member_claims,
             list_claims,
             get_member_audit_history,
             create_claim,
+            resolve_claim_insurance,
             update_claim,
             create_database_backup,
             select_database_backup,
@@ -2263,6 +2878,26 @@ mod tests {
     }
 
     #[test]
+    fn historical_claim_uses_insurance_record_from_occurrence_year() {
+        let (_directory, database) = synthetic_database();
+        let connection = open_write(&database).unwrap();
+        ensure_member_contact_schema(&connection).unwrap();
+        let current_row:i64=connection.query_row(r#"SELECT rowid FROM "Seznam" WHERE "RodnéČíslo"='TEST-0001' AND pojisteni_rok("PojištěníOd")=2026"#,[],|row|row.get(0)).unwrap();
+        let (historical, year) =
+            claim_member_record(&connection, current_row, "2024-08-15").unwrap();
+        assert_eq!(year, 2024);
+        assert_eq!(
+            insurance_year(historical.insurance_from.as_deref().unwrap()),
+            Some(2024)
+        );
+        assert_eq!(historical.premium.as_deref(), Some("495"));
+        assert_ne!(historical.row_id, current_row);
+        assert!(claim_member_record(&connection, current_row, "2023-08-15")
+            .unwrap_err()
+            .contains("nejsou dostupné"));
+    }
+
+    #[test]
     fn access_mapping_requires_matching_code() {
         let input = NewInsured {
             title: None,
@@ -2285,6 +2920,7 @@ mod tests {
             code: 2,
             registration_year: 2026,
             email: None,
+            phone: None,
         };
         assert_eq!(validate_input(&input).unwrap_err(), "Zkontrolujte KódOC.");
     }
@@ -2324,6 +2960,7 @@ mod tests {
             code: 1,
             registration_year: 2026,
             email: None,
+            phone: None,
         };
 
         let result = save_to_database(&database, "test-user", input).unwrap();
@@ -2666,6 +3303,121 @@ mod tests {
     }
 
     #[test]
+    fn every_operational_report_previews_and_exports_csv() {
+        let (_directory, database) = synthetic_database();
+        let connection = open_write(&database).unwrap();
+        claims::ensure_schema(&connection).unwrap();
+        for kind in [
+            "insurer",
+            "oc",
+            "zo",
+            "claims",
+            "starts",
+            "terminations",
+            "contacts",
+            "duplicates",
+            "quality",
+            "member",
+        ] {
+            let filter = reports::ReportFilter {
+                kind: kind.into(),
+                year: 2026,
+                organization_code: None,
+                organization: None,
+                date_from: None,
+                date_to: None,
+                search: None,
+            };
+            let report = reports::preview(&connection, &filter)
+                .unwrap_or_else(|error| panic!("report {kind}: {error}"));
+            assert!(!report.columns.is_empty(), "report {kind} has no columns");
+            let csv = reports::csv(&report);
+            assert!(
+                csv.starts_with(&[0xEF, 0xBB, 0xBF]),
+                "report {kind} has no UTF-8 BOM"
+            );
+        }
+    }
+
+    #[test]
+    fn controlled_deactivation_ends_only_current_record_and_audits() {
+        let (_directory, database) = synthetic_database();
+        let connection = open_read_only(&database).unwrap();
+        let row_id: i64 = connection.query_row(r#"SELECT rowid FROM "Seznam" WHERE pojisteni_rok("PojištěníOd")=2026 AND NULLIF(TRIM("Ukončení"),'') IS NULL LIMIT 1"#,[],|row|row.get(0)).unwrap();
+        drop(connection);
+        deactivate_current_member_at(&database, "tester", 2026, row_id, "ukončení na žádost")
+            .unwrap();
+        let connection = open_read_only(&database).unwrap();
+        let (termination, note): (String, String) = connection
+            .query_row(
+                r#"SELECT "Ukončení",COALESCE("Poznámka",'') FROM "Seznam" WHERE rowid=?1"#,
+                [row_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(!termination.is_empty());
+        assert!(note.contains("STORNO:"));
+        let audit:i64=connection.query_row(r#"SELECT COUNT(*) FROM "AuditLog" WHERE "Operace"='DEACTIVATE' AND "Výsledek"='OK'"#,[],|row|row.get(0)).unwrap();
+        assert_eq!(audit, 1);
+    }
+
+    #[test]
+    fn all_member_document_pdfs_are_created_and_voucher_is_linked() {
+        let (directory, database) = synthetic_database();
+        let mut connection = open_write(&database).unwrap();
+        financial_documents::ensure_schema(&connection).unwrap();
+        let row_id: i64 = connection
+            .query_row(
+                r#"SELECT rowid FROM "Seznam" WHERE pojisteni_rok("PojištěníOd")=2026 LIMIT 1"#,
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let data = financial_documents::member_data(&connection, row_id, 2026).unwrap();
+        for kind in ["application", "voucher", "envelope", "label"] {
+            let path = directory.path().join(format!("{kind}.pdf"));
+            financial_documents::member_pdf(&data, kind, &path).unwrap();
+            let bytes = fs::read(&path).unwrap();
+            assert!(bytes.starts_with(b"%PDF"));
+            financial_documents::record_member_document(
+                &mut connection,
+                "tester",
+                &data,
+                kind,
+                &bytes,
+            )
+            .unwrap();
+        }
+        let documents: i64 = connection
+            .query_row(r#"SELECT COUNT(*) FROM "ClenskeDoklady""#, [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(documents, 5);
+    }
+
+    #[test]
+    fn member_import_previews_inserts_and_audits() {
+        let (directory, database) = synthetic_database();
+        let source = directory.path().join("import.csv");
+        fs::write(&source,"Jméno;Příjmení;Rodné číslo;Evidenční číslo;OC;ZO;Pojištění od;Pojištění do;Pojistná částka;Kategorie;Pojistné;E-mail\nImport;Test;991231/9999;99991;2;Test ZO;2026-01-01;2026-12-31;320000;B;781;import@example.invalid\n").unwrap();
+        let mut connection = open_write(&database).unwrap();
+        create_audit_table(&connection).unwrap();
+        let preview = member_import::preview(&connection, &source).unwrap();
+        assert_eq!((preview.valid, preview.errors.len()), (1, 0));
+        let result = member_import::execute(&mut connection, &source, "tester").unwrap();
+        assert_eq!((result.inserted, result.skipped_duplicates), (1, 0));
+        let duplicate = member_import::preview(&connection, &source).unwrap();
+        assert_eq!(duplicate.skipped_duplicates, 1);
+        let audit: i64 = connection
+            .query_row(
+                r#"SELECT COUNT(*) FROM "AuditLog" WHERE "Operace"='IMPORT'"#,
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(audit, 1);
+    }
+
+    #[test]
     fn member_detail_uses_exact_current_record_and_verified_history_identity() {
         let (_directory, database) = synthetic_database();
         let connection = open_read_only(&database).unwrap();
@@ -2883,6 +3635,7 @@ mod tests {
                 affiliation: current.affiliation.unwrap(),
                 code: current.code.unwrap(),
                 email: Some(private_email.into()),
+                phone: Some("+420 123 456 789".into()),
                 note: Some("Aktuální poznámka".into()),
                 actual_payment: current.actual_payment.and_then(|value| value.parse().ok()),
                 actual_termination: current.actual_termination,
@@ -2892,6 +3645,7 @@ mod tests {
         let connection = open_read_only(&database).unwrap();
         let updated = current_member_record(&connection, row_id, 2026).unwrap();
         assert_eq!(updated.email.as_deref(), Some(private_email));
+        assert_eq!(updated.phone.as_deref(), Some("+420 123 456 789"));
         let history_after: Vec<(i64, Option<String>, Option<String>)> = connection
             .prepare(
                 r#"SELECT rowid, "Poznámka", "e-mail" FROM "Seznam"

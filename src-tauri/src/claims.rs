@@ -282,12 +282,15 @@ pub fn update(
     let changed = transaction
         .execute(
             r#"UPDATE "PojistneUdalosti" SET
-                "Telefon"=?1, "Zamestnavatel"=?2, "Povolani"=?3, "VznikPU"=?4,
-                "OznameniPU"=?5, "ZjistenaSkoda"=?6, "PojistnePlneni"=?7,
-                "PopisUdalosti"=?8, "Poznamka1"=?9, "Poznamka2"=?10,
-                "Ukonceno"=?11, "ResiPojistovna"=?12, "PolohaVSestave"=?13
-               WHERE "ID"=?14 AND "IdentifikatorClena"=?15 AND "PojistnyRok"=?16"#,
+                "PojistnyZaznamRowId"=?1, "PojistnyRok"=?2,
+                "Telefon"=?3, "Zamestnavatel"=?4, "Povolani"=?5, "VznikPU"=?6,
+                "OznameniPU"=?7, "ZjistenaSkoda"=?8, "PojistnePlneni"=?9,
+                "PopisUdalosti"=?10, "Poznamka1"=?11, "Poznamka2"=?12,
+                "Ukonceno"=?13, "ResiPojistovna"=?14, "PolohaVSestave"=?15
+               WHERE "ID"=?16 AND "IdentifikatorClena"=?17"#,
             params![
+                input.insurance_row_id,
+                insurance_year,
                 clean(input.phone),
                 clean(input.employer),
                 clean(input.occupation),
@@ -303,7 +306,6 @@ pub fn update(
                 clean(input.report_position),
                 id,
                 member_identifier,
-                insurance_year,
             ],
         )
         .map_err(|_| "Pojistnou událost se nepodařilo upravit.".to_string())?;
