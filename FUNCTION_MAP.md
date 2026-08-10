@@ -85,7 +85,7 @@ Všechny doložené funkční oblasti Accessu mají v Tauri aplikaci provozní e
 | FM-31 | Tisk/export přehledu pro pojišťovnu | `_PřehledOC`, `SestPoj`, `SestPojEmail` | Stejný filtrovaný dataset v náhledu, PDF a CSV | Hotovo | — |
 | FM-32 | Sestava OC | `Sestava`, `SestavaOC`, `SestKontr` | Parametr OC/rok, náhled, PDF a CSV | Hotovo | — |
 | FM-33 | Sestava ZO včetně potvrzení, počtů a odesílací varianty | `SestavaZO`, `SestavaZOpod`, `SestavaZO_Old`; `SestavaZO`, `_Potvrz`, `_Počty`, `Sest_Odes`; `Export_kontrol` | Parametr ZO/rok, náhled, PDF a CSV | Hotovo | — |
-| FM-34 | Sestava HVP a evidence vystavených sestav | `SestHVP`, `SestHVPpod`, `SestPřehl`; `SestPřehl`; tabulky `Sestavy`, `SestavyHVP`; `Kon`, `OdstrSes` | Parametrická HVP sestava s auditem exportu | Hotovo | — |
+| FM-34 | Sestava HVP a evidence vystavených sestav | `SestHVP`, `SestHVPpod`, `SestPřehl`; `SestPřehl`; tabulky `Sestavy`, `SestavyHVP`; `Kon`, `OdstrSes` | Parametrická HVP sestava s auditem exportu a samostatná read-only historie 141 původních záznamů | Hotovo | Historie zpřístupněna ve sprintu `FED-PARITY-REPORT-HISTORY-01`. |
 | FM-35 | Přehled počátků a ukončení pojištění | `Přehled`; `SestP2`, `SestP2_Adrs`; `SeznamOd`, `SeznamKonec`, `Seznam_podsest` | Samostatné sestavy počátků a ukončení s obdobím | Hotovo | — |
 | FM-36 | Export začátků/ukončení do Excelu | `PřenosDat`; `Přev`, `Ukon` | CSV UTF-8 pro Excel a PDF přes dialog uložení | Nahrazeno | Bez pevných cest a pomocných tabulek. |
 | FM-37 | Export ZO do XLS/RTF/DOC/PDF | `Makro1`, `test`, převedená makra; `Export_kontrol` | Sjednocený PDF a CSV UTF-8 export | Nahrazeno | Historické RTF/DOC formáty nebyly kopírovány. |

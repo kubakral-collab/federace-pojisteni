@@ -28,6 +28,20 @@ pub struct ReportPreview {
     pub total_rows: usize,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyReportHistory {
+    pub source: String,
+    pub source_row_id: i64,
+    pub sequence_number: Option<i64>,
+    pub issued_on: Option<String>,
+    pub insured_count: Option<i64>,
+    pub total_amount: Option<String>,
+    pub insurance_from: Option<String>,
+    pub insurance_to: Option<String>,
+    pub note: Option<String>,
+}
+
 pub fn ensure_schema(connection: &Connection) -> rusqlite::Result<()> {
     connection.execute_batch(
         r#"CREATE TABLE IF NOT EXISTS "AuditSestav" (
@@ -41,6 +55,46 @@ pub fn ensure_schema(connection: &Connection) -> rusqlite::Result<()> {
         "Vysledek" TEXT NOT NULL
     );"#,
     )
+}
+
+pub fn legacy_history(connection: &Connection) -> rusqlite::Result<Vec<LegacyReportHistory>> {
+    let mut output = Vec::new();
+    for (table, source) in [("Sestavy", "Sestava"), ("SestavyHVP", "HVP")] {
+        let exists: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+            [table],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            continue;
+        }
+        let mut statement = connection.prepare(&format!(r#"SELECT rowid,* FROM "{table}""#))?;
+        let rows = statement.query_map([], |row| {
+            let amount = match row.get_ref(4)? {
+                ValueRef::Null => None,
+                other => Some(value(other)),
+            };
+            Ok(LegacyReportHistory {
+                source: source.into(),
+                source_row_id: row.get(0)?,
+                sequence_number: row.get(1)?,
+                issued_on: row.get(2)?,
+                insured_count: row.get(3)?,
+                total_amount: amount,
+                insurance_from: row.get(5)?,
+                insurance_to: row.get(6)?,
+                note: row.get(7)?,
+            })
+        })?;
+        output.extend(rows.collect::<rusqlite::Result<Vec<_>>>()?);
+    }
+    output.sort_by(|left, right| {
+        right
+            .issued_on
+            .cmp(&left.issued_on)
+            .then_with(|| right.source_row_id.cmp(&left.source_row_id))
+    });
+    Ok(output)
 }
 
 fn value(value: ValueRef<'_>) -> String {
@@ -547,5 +601,35 @@ mod tests {
         };
         pdf(&report, &destination).unwrap();
         assert!(std::fs::metadata(destination).unwrap().len() > 1_000);
+    }
+
+    #[test]
+    fn legacy_report_history_reads_both_access_tables_by_position() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(r#"
+            CREATE TABLE "Sestavy" ("a" INTEGER,"b" TEXT,"c" INTEGER,"d" NUMERIC,"e" TEXT,"f" TEXT,"g" TEXT);
+            CREATE TABLE "SestavyHVP" ("a" INTEGER,"b" TEXT,"c" INTEGER,"d" NUMERIC,"e" TEXT,"f" TEXT,"g" TEXT);
+            INSERT INTO "Sestavy" VALUES(NULL,'2024-03-07 00:00:00',7,0,NULL,'2024-03-31 00:00:00',NULL);
+            INSERT INTO "SestavyHVP" VALUES(1,'2002-01-09 00:00:00',25,5570,'2002-01-01 00:00:00',NULL,NULL);
+        "#).unwrap();
+        let rows = legacy_history(&connection).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].source, "Sestava");
+        assert_eq!(rows[1].source, "HVP");
+        assert_eq!(rows[1].insured_count, Some(25));
+        assert_eq!(rows[1].total_amount.as_deref(), Some("5570"));
+    }
+
+    #[test]
+    fn verified_access_report_history_contains_141_rows() {
+        let Some(path) = std::env::var_os("FED_REPORT_HISTORY_DB") else {
+            return;
+        };
+        let connection =
+            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let rows = legacy_history(&connection).unwrap();
+        assert_eq!(rows.len(), 141);
+        assert_eq!(rows.iter().filter(|row| row.source == "Sestava").count(), 3);
+        assert_eq!(rows.iter().filter(|row| row.source == "HVP").count(), 138);
     }
 }

@@ -31,13 +31,15 @@ Ověřeno proti tagům `v0.17.0`–`v0.21.0`, kódu a testům.
 
 ## Aktuální sprint
 
-### Žádný aktivní sprint — čeká se na schválení Product Ownerem
+### FED-PARITY-REPORT-HISTORY-01 — Historie vystavených sestav
 
 - **Milestone:** M1 — Stabilizace Core
-- **Poslední dokončený sprint:** `FED-PARITY-CLAIMS-MIGRATION-01`, akceptován rozhodnutím D-020.
-- **Přeskočený sprint:** `FED-PARITY-ARCHIVE-LEGACY-01` byl rozhodnutím D-020 vrácen do backlogu.
-- **Přeskočený sprint:** `FED-PARITY-INVOICES-LEGACY-01` byl rozhodnutím D-021 rovněž vrácen do backlogu.
-- **Navržený další sprint:** `FED-PARITY-REPORT-HISTORY-01` — zatím neschválen, implementace nezačala.
+- **Stav:** dokončeno a otestováno; čeká na akceptaci Product Ownerem
+- **Priorita:** P1
+- **Scope:** zpřístupnit 141 historických záznamů z `Sestavy` a `SestavyHVP` v režimu pouze pro čtení a oddělit je od nového auditu exportů.
+- **Mimo scope:** úpravy historie, regenerace původních souborů a migrace odložených archivních záznamů nebo faktur.
+- **Výstup:** [SPRINT_FED-PARITY-REPORT-HISTORY-01.md](SPRINT_FED-PARITY-REPORT-HISTORY-01.md).
+- **Další krok:** zastavit a požádat Product Ownera o schválení `FED-PARITY-WORKFLOWS-01`.
 
 ## Pořadí sprintů funkční parity
 
@@ -48,7 +50,7 @@ Ověřeno proti tagům `v0.17.0`–`v0.21.0`, kódu a testům.
 | 3 | `FED-PARITY-CLAIMS-MIGRATION-01` | P0 | Zpřístupnit 112 původních pojistných událostí, zachovat ID a oddělit nejasné historické vazby. | Dokončeno, otestováno a akceptováno PO |
 | 4 | `FED-PARITY-ARCHIVE-LEGACY-01` | P0 | Zpřístupnit 4 386 archivních záznamů z let 2002–2010 v read-only archivu. | Přeskočeno rozhodnutím D-020; vráceno do backlogu |
 | 5 | `FED-PARITY-INVOICES-LEGACY-01` | P0 | Zpřístupnit 4 652 původních faktur/poukázek a potvrdit význam finančního workflow. | Přeskočeno rozhodnutím D-021; vráceno do backlogu |
-| 6 | `FED-PARITY-REPORT-HISTORY-01` | P1 | Zpřístupnit historii 141 vystavených sestav. | Navržený další sprint; čeká na samostatné schválení PO |
+| 6 | `FED-PARITY-REPORT-HISTORY-01` | P1 | Zpřístupnit historii 141 vystavených sestav. | Dokončeno a otestováno; 3 sestavy + 138 HVP |
 | 7 | `FED-PARITY-WORKFLOWS-01` | P1 | Side-by-side ověřit pojištěnce, tarify, platby, příkazy a roční převod. | Čeká na schválení po sprintu 6 |
 | 8 | `FED-PARITY-AUXILIARY-DATA-01` | P2 | Klasifikovat `Seznam_`, `Odklad`, `Břeclav` a externí zdroje bez automatického slučování. | Čeká na schválení po sprintu 7 |
 

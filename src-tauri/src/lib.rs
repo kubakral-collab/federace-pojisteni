@@ -2192,6 +2192,18 @@ fn preview_operational_report(
 }
 
 #[tauri::command]
+fn list_legacy_report_history(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<reports::LegacyReportHistory>, String> {
+    authenticated_user(&state)?;
+    let path = working_database_path(&app)?;
+    ensure_current_insurance_year(&path)?;
+    reports::legacy_history(&open_read_only(&path)?)
+        .map_err(|_| "Historii sestav se nepodařilo načíst.".to_string())
+}
+
+#[tauri::command]
 fn export_operational_report(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -2751,6 +2763,7 @@ pub fn run() {
             audit_payment_order_print,
             open_generated_pdf,
             preview_operational_report,
+            list_legacy_report_history,
             export_operational_report,
             list_invoices,
             create_invoice,

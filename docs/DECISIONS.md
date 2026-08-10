@@ -23,5 +23,6 @@ Konsolidováno 2026-08-02. Rozhodnutí není oficiální, dokud zde není zapsá
 - D-019 (2026-08-10): Product Owner po dokončení sprintu 2 schválil jako sprint 3 `FED-PARITY-CLAIMS-MIGRATION-01`. Migrace 112 původních událostí musí být idempotentní, zachovat původní ID a nesmí automaticky odhadovat nejednoznačné historické vazby.
 - D-020 (2026-08-10): Product Owner rozhodl přeskočit `FED-PARITY-ARCHIVE-LEGACY-01` (sprint 4). Zpřístupnění 4 386 archivních záznamů z let 2002–2010 se vrací do backlogu, není zrušeno a nesmí být implementováno bez nového výslovného schválení.
 - D-021 (2026-08-10): Product Owner rozhodl přeskočit `FED-PARITY-INVOICES-LEGACY-01` (sprint 5). Zpřístupnění 4 652 původních faktur a poukázek se vrací do backlogu, není zrušeno a nesmí být implementováno bez nového výslovného schválení.
+- D-022 (2026-08-10): Product Owner schválil `FED-PARITY-REPORT-HISTORY-01` jako aktuální sprint 6 s prioritou P1. Historie 141 záznamů z tabulek `Sestavy` a `SestavyHVP` bude zpřístupněna pouze pro čtení a bez změny původních dat.
 
 Důvodem rozhodnutí je kontinuita provozu, jednoduchost, ochrana dat a řízený dlouhodobý vývoj.

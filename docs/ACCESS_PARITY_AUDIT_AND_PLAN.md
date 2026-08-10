@@ -59,7 +59,7 @@ Proto se stav „funkční parita dokončena“ nahrazuje stavem **částečná 
 | Pojistné události – historie | všech 112 řádků je bezeztrátově archivováno a zobrazeno v nové agendě; 98 přesně napojeno | 14 vazeb zůstává záměrně read-only bez odhadu | Provozně zpřístupněno | — |
 | Historická vazba událostí | 98 přesných vazeb; 2 bez data, 11 bez záznamu přesného roku a 1 nejednoznačná vazba jsou označeny a odděleny | případné ruční dořešení vyžaduje samostatné schválení a podklad | Bezpečně odděleno | P2 |
 | Sestavy OC/ZO/HVP a přehledy | parametrické náhledy, PDF/CSV a základní test datasetu | současné PDF je obecná tabulka; varianty, součty, pořadí, hlavičky a tiskový vzhled 31 Access sestav nejsou jednotlivě akceptované | Částečně shodné | P1 |
-| Historie vystavených sestav | původní `Sestavy` má 3 a `SestavyHVP` 138 řádků | nové `AuditSestav` eviduje pouze nové exporty a původní historii nezobrazuje | Chybí | P1 |
+| Historie vystavených sestav | všech 141 řádků z `Sestavy` a `SestavyHVP` je dostupných v samostatné read-only tabulce | historie je záměrně oddělena od nového auditu exportů | Zpřístupněno | — |
 | Roční převod | záloha, transakce, nulová úhrada, nové období, nové sazby a idempotence mají automatický test | side-by-side test na kopii reálných dat a kontrolní součty proti Access výsledku | Téměř shodné | P1 |
 | Import/připojená data | CSV import s náhledem, validací, zálohou a auditem | původní externí `Členská základna` a Excel `Email` nebyly dodány; rozhodnout, zda je živé propojení stále provozní požadavek | Bezpečně nahrazeno / k rozhodnutí | P2 |
 | Zálohy a obnova | ověřené balíčky, kontrola integrity a nouzová záloha | provozní obnovovací zkouška na uživatelské kopii | Lepší než Access, čeká akceptace | P1 |

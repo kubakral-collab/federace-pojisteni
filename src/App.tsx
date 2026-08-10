@@ -180,6 +180,7 @@ type BatchCertificateFilter = { paidFrom: string; organizationCode: string; orga
 type BatchCertificateResult = { selected: number; created: number; existing: number; skipped: number; errors: string[]; receiptIds: number[] };
 type OperationalReportFilter = { kind: string; year: number; organizationCode: string; organization: string; dateFrom: string; dateTo: string; search:string };
 type OperationalReport = { title: string; columns: string[]; rows: string[][]; totalRows: number };
+type LegacyReportHistory = { source:string; sourceRowId:number; sequenceNumber?:number; issuedOn?:string; insuredCount?:number; totalAmount?:string; insuranceFrom?:string; insuranceTo?:string; note?:string };
 type Invoice = { id:number; number:string; supplier:string; account:string; variableSymbol:string; amount:number; dueOn:string; status:string; batchId?:number; note?:string };
 type InvoiceInput = { supplier:string; accountNumber:string; bankCode:string; variableSymbol:string; constantSymbol:string; specificSymbol:string; amount:string; dueOn:string; note:string };
 type ImportPreview={path:string;total:number;valid:number;skippedDuplicates:number;errors:string[];sample:string[][]};
@@ -961,6 +962,7 @@ export default function App() {
   const [insurerLoading, setInsurerLoading] = useState(false);
   const [reportFilter, setReportFilter] = useState<OperationalReportFilter>({ kind: "insurer", year: new Date().getFullYear(), organizationCode: "", organization: "", dateFrom: "", dateTo: "",search:"" });
   const [operationalReport, setOperationalReport] = useState<OperationalReport | null>(null);
+  const [legacyReportHistory,setLegacyReportHistory]=useState<LegacyReportHistory[]>([]);
   const [reportBusy, setReportBusy] = useState(false);
   const [invoices,setInvoices]=useState<Invoice[]>([]);
   const [invoiceForm,setInvoiceForm]=useState<InvoiceInput>({supplier:"",accountNumber:"",bankCode:"",variableSymbol:"",constantSymbol:"",specificSymbol:"",amount:"",dueOn:new Date().toISOString().slice(0,10),note:""});
@@ -1168,6 +1170,7 @@ export default function App() {
     if (screen === "Správa záloh" && !preview) void loadDatabaseBackups();
     if (screen === "Doklady o zaplacení" && !preview) void loadReceipts(undefined, "");
     if (screen === "Pojistné události" && !preview) void loadClaimsOverview();
+    if (screen === "Sestavy a exporty" && !preview) void loadLegacyReportHistory();
   }, [screen]);
 
   useEffect(() => {
@@ -1555,6 +1558,8 @@ export default function App() {
     catch (message) { setError(String(message)); }
     finally { setReportBusy(false); }
   }
+
+  async function loadLegacyReportHistory(){setReportBusy(true);setError("");try{setLegacyReportHistory(await invoke<LegacyReportHistory[]>("list_legacy_report_history"));}catch(message){setError(String(message));}finally{setReportBusy(false);}}
 
   async function loadInvoices(){setFinanceBusy(true);setError("");try{setInvoices(await invoke<Invoice[]>("list_invoices"));}catch(message){setError(String(message));}finally{setFinanceBusy(false);}}
   async function saveInvoice(){setFinanceBusy(true);setError("");try{await invoke("create_invoice",{invoice:{...invoiceForm,amount:Number(invoiceForm.amount),constantSymbol:optional(invoiceForm.constantSymbol),specificSymbol:optional(invoiceForm.specificSymbol),note:optional(invoiceForm.note)}});setInvoiceForm({...invoiceForm,supplier:"",variableSymbol:"",amount:"",note:""});await loadInvoices();setNotice("Faktura byla založena.");}catch(message){setError(String(message));}finally{setFinanceBusy(false);}}
@@ -2328,6 +2333,7 @@ export default function App() {
           <div className="form-actions"><button className="primary" disabled={reportBusy} onClick={()=>void previewOperationalReport()}><Search/> Náhled</button><button disabled={reportBusy} onClick={()=>void exportOperationalReport("pdf")}><FileText/> Export PDF</button><button disabled={reportBusy} onClick={()=>void exportOperationalReport("csv")}><Upload/> Export CSV</button></div>
         </section>
         {operationalReport && <section><header className="member-payments-header"><div><h2>{operationalReport.title}</h2><small>{operationalReport.totalRows.toLocaleString("cs-CZ")} řádků</small></div></header><div className="claims-table"><table><thead><tr>{operationalReport.columns.map(column=><th key={column}>{column}</th>)}</tr></thead><tbody>{operationalReport.rows.slice(0,500).map((row,index)=><tr key={index}>{row.map((cell,cellIndex)=><td key={cellIndex}>{cell}</td>)}</tr>)}{operationalReport.rows.length===0&&<tr><td colSpan={operationalReport.columns.length} className="empty-row">Sestava neobsahuje žádné záznamy.</td></tr>}</tbody></table></div>{operationalReport.rows.length>500&&<p>Zobrazeno prvních 500 řádků; export obsahuje všechna data.</p>}</section>}
+        <section className="agenda-workspace"><header className="member-payments-header"><div><h2>Historie vystavených sestav</h2><small>{legacyReportHistory.length.toLocaleString("cs-CZ")} historických záznamů · pouze pro čtení</small></div><button disabled={reportBusy} onClick={()=>void loadLegacyReportHistory()}>Obnovit</button></header><div className="claims-table"><table><thead><tr><th>Zdroj</th><th>Pořadové číslo</th><th>Datum vystavení</th><th>Počet pojištěnců</th><th>Celková částka</th><th>Pojištění od</th><th>Konec pojištění</th><th>Poznámka</th></tr></thead><tbody>{legacyReportHistory.map(item=><tr key={`${item.source}-${item.sourceRowId}`}><td>{item.source}</td><td>{item.sequenceNumber??"—"}</td><td>{displayDate(item.issuedOn)}</td><td>{item.insuredCount??"—"}</td><td>{item.totalAmount==null?"—":displayCurrency(Number(item.totalAmount))}</td><td>{displayDate(item.insuranceFrom)}</td><td>{displayDate(item.insuranceTo)}</td><td>{display(item.note)}</td></tr>)}{!legacyReportHistory.length&&<tr><td colSpan={8} className="empty-row">Historie sestav je prázdná.</td></tr>}</tbody></table></div></section>
       </div>
     </Shell>;
   }
