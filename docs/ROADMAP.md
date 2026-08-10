@@ -31,15 +31,12 @@ Ověřeno proti tagům `v0.17.0`–`v0.21.0`, kódu a testům.
 
 ## Aktuální sprint
 
-### FED-PARITY-CLAIMS-MIGRATION-01 — Zpřístupnění původních pojistných událostí
+### Žádný aktivní sprint — čeká se na schválení Product Ownerem
 
 - **Milestone:** M1 — Stabilizace Core
-- **Stav:** dokončeno a otestováno; čeká na akceptaci Product Ownerem
-- **Priorita:** P0
-- **Scope:** bezpečně zpřístupnit 112 řádků původní tabulky `Poj_udalost`, zachovat původní ID, dohledatelnost zdroje a oddělit nejasné historické vazby.
-- **Mimo scope:** změna historických údajů, automatické domýšlení chybějícího roku a migrace jiných archivních tabulek.
-- **Výstup:** [SPRINT_FED-PARITY-CLAIMS-MIGRATION-01.md](SPRINT_FED-PARITY-CLAIMS-MIGRATION-01.md).
-- **Další krok:** zastavit a požádat Product Ownera o schválení `FED-PARITY-ARCHIVE-LEGACY-01`.
+- **Poslední dokončený sprint:** `FED-PARITY-CLAIMS-MIGRATION-01`, akceptován rozhodnutím D-020.
+- **Přeskočený sprint:** `FED-PARITY-ARCHIVE-LEGACY-01` byl rozhodnutím D-020 vrácen do backlogu.
+- **Navržený další sprint:** `FED-PARITY-INVOICES-LEGACY-01` — zatím neschválen, implementace nezačala.
 
 ## Pořadí sprintů funkční parity
 
@@ -47,9 +44,9 @@ Ověřeno proti tagům `v0.17.0`–`v0.21.0`, kódu a testům.
 |---:|---|---|---|---|
 | 1 | `FED-PARITY-SOURCE-RECONCILE-01` | P0 | Read-only rozdílový audit produkčního Accessu a `dd.sqlite`; určit osm rozdílných řádků bez změny dat. | Dokončeno; 14 370 shodných, 36 změněných, 2 pouze Access, 10 pouze SQLite |
 | 2 | `FED-PARITY-DOCUMENTS-01` | P1 | Ověřit a dorovnat aktivní doklad, přihlášku, událost a sestavy OC/ZO/HVP; přesná shoda poukázky, obálky a štítku je rozhodnutím D-017 mimo scope. | Dokončeno, otestováno a akceptováno PO |
-| 3 | `FED-PARITY-CLAIMS-MIGRATION-01` | P0 | Zpřístupnit 112 původních pojistných událostí, zachovat ID a oddělit nejasné historické vazby. | Dokončeno a otestováno; 98 napojeno, 14 bezpečně ve frontě |
-| 4 | `FED-PARITY-ARCHIVE-LEGACY-01` | P0 | Zpřístupnit 4 386 archivních záznamů z let 2002–2010 v read-only archivu. | Čeká na schválení po sprintu 3 |
-| 5 | `FED-PARITY-INVOICES-LEGACY-01` | P0 | Zpřístupnit 4 652 původních faktur/poukázek a potvrdit význam finančního workflow. | Čeká na schválení po sprintu 4 |
+| 3 | `FED-PARITY-CLAIMS-MIGRATION-01` | P0 | Zpřístupnit 112 původních pojistných událostí, zachovat ID a oddělit nejasné historické vazby. | Dokončeno, otestováno a akceptováno PO |
+| 4 | `FED-PARITY-ARCHIVE-LEGACY-01` | P0 | Zpřístupnit 4 386 archivních záznamů z let 2002–2010 v read-only archivu. | Přeskočeno rozhodnutím D-020; vráceno do backlogu |
+| 5 | `FED-PARITY-INVOICES-LEGACY-01` | P0 | Zpřístupnit 4 652 původních faktur/poukázek a potvrdit význam finančního workflow. | Navržený další sprint; čeká na samostatné schválení PO |
 | 6 | `FED-PARITY-REPORT-HISTORY-01` | P1 | Zpřístupnit historii 141 vystavených sestav. | Čeká na schválení po sprintu 5 |
 | 7 | `FED-PARITY-WORKFLOWS-01` | P1 | Side-by-side ověřit pojištěnce, tarify, platby, příkazy a roční převod. | Čeká na schválení po sprintu 6 |
 | 8 | `FED-PARITY-AUXILIARY-DATA-01` | P2 | Klasifikovat `Seznam_`, `Odklad`, `Břeclav` a externí zdroje bez automatického slučování. | Čeká na schválení po sprintu 7 |
