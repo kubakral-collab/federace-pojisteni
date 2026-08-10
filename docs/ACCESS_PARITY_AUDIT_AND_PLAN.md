@@ -1,6 +1,6 @@
 # Audit funkční shody Access → Federace a pracovní plán
 
-Datum auditu: 2026-08-10  
+Datum auditu: 2026-08-10
 Stav: audit zdrojů a statické porovnání dokončeno; implementace nápravných sprintů nezahájena
 
 ## Cíl
