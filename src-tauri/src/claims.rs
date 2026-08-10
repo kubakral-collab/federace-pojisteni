@@ -1,6 +1,7 @@
+use printpdf::{Mm, PdfDocument};
 use rusqlite::{params, Connection, TransactionBehavior};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::{fs::File, io::BufWriter, path::Path};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -325,6 +326,107 @@ pub fn update(
         .map_err(|_| "Pojistnou událost se nepodařilo upravit.".to_string())
 }
 
+pub fn export_pdf(connection: &Connection, id: i64, destination: &Path) -> Result<(), String> {
+    let values: Vec<String> = connection
+        .query_row(
+            r#"SELECT
+                TRIM(COALESCE(member."Titul",'')||' '||COALESCE(member."Příjmení",'')||' '||COALESCE(member."Jméno",'')),
+                COALESCE(member."RodnéČíslo",''), COALESCE(CAST(member."EvČíslo" AS TEXT),''),
+                TRIM(COALESCE(member."Adresa",'')||', '||COALESCE(member."PSČ",'')||' '||COALESCE(member."Město",'')),
+                COALESCE(claim."Telefon", member."Telefon",''), COALESCE(member."e-mail",''),
+                COALESCE(claim."Povolani",''), COALESCE(claim."Zamestnavatel",''),
+                'Kategorie '||COALESCE(member."Kategorie",'')||'; roč. '||COALESCE(member."RočPojistné",0),
+                COALESCE(member."PojištěníOd",'')||' - '||COALESCE(member."PojištěníDo",''),
+                COALESCE(claim."VznikPU",''), COALESCE(claim."OznameniPU",''),
+                COALESCE(claim."PopisUdalosti",''), COALESCE(claim."Poznamka1",''),
+                COALESCE(claim."Poznamka2",''), COALESCE(CAST(claim."ZjistenaSkoda" AS TEXT),''),
+                COALESCE(claim."ResiPojistovna",''), COALESCE(CAST(claim."PojistnePlneni" AS TEXT),''),
+                COALESCE(claim."Ukonceno",'')
+              FROM "PojistneUdalosti" claim
+              JOIN "Seznam" member ON member.rowid=claim."PojistnyZaznamRowId"
+              WHERE claim."ID"=?1"#,
+            [id],
+            |row| (0..19).map(|index| row.get(index)).collect(),
+        )
+        .map_err(|_| "Podklady hlášení pojistné události nebyly nalezeny.".to_string())?;
+    let (document, page, layer) =
+        PdfDocument::new("Pojistná událost", Mm(210.0), Mm(297.0), "Hlášení");
+    let regular = document
+        .add_external_font(
+            File::open(r"C:\Windows\Fonts\arial.ttf")
+                .map_err(|_| "Písmo není dostupné.".to_string())?,
+        )
+        .map_err(|_| "Písmo není dostupné.".to_string())?;
+    let bold = document
+        .add_external_font(
+            File::open(r"C:\Windows\Fonts\arialbd.ttf")
+                .map_err(|_| "Písmo není dostupné.".to_string())?,
+        )
+        .map_err(|_| "Písmo není dostupné.".to_string())?;
+    let current = document.get_page(page).get_layer(layer);
+    current.use_text(
+        "S dokumentem je nutno nakládat v souladu s pravidly ochrany osobních údajů.",
+        6.0,
+        Mm(20.0),
+        Mm(287.0),
+        &regular,
+    );
+    current.use_text("POJISTNÁ UDÁLOST", 17.0, Mm(70.0), Mm(274.0), &bold);
+    let labels = [
+        "Pojištěnec:",
+        "Rodné číslo:",
+        "Evidenční číslo:",
+        "Bydliště:",
+        "Telefon:",
+        "e-mail:",
+        "Povolání:",
+        "Zaměstnavatel:",
+        "Typ pojištění:",
+        "Pojistné období:",
+        "Vznik PU:",
+        "Oznámení PU:",
+    ];
+    let mut y = 254.0;
+    for (label, value) in labels.iter().zip(values.iter()) {
+        current.use_text(*label, 10.0, Mm(22.0), Mm(y), &bold);
+        current.use_text(value, 10.0, Mm(66.0), Mm(y), &regular);
+        y -= 8.0;
+    }
+    for (label, index, lines) in [
+        ("Popis PU:", 12_usize, 3_usize),
+        ("Poznámky k PU:", 13, 2),
+        ("Doplňky k PU:", 14, 2),
+    ] {
+        current.use_text(label, 10.0, Mm(22.0), Mm(y), &bold);
+        let chars: Vec<char> = values[index].replace(['\r', '\n'], " ").chars().collect();
+        for (line, chunk) in chars.chunks(95).take(lines).enumerate() {
+            current.use_text(
+                chunk.iter().collect::<String>(),
+                9.0,
+                Mm(66.0),
+                Mm(y - line as f32 * 5.0),
+                &regular,
+            );
+        }
+        y -= lines as f32 * 5.0 + 5.0;
+    }
+    for (label, index) in [
+        ("Zjištěná škoda:", 15_usize),
+        ("Řeší pojišťovna:", 16),
+        ("Pojistné plnění:", 17),
+        ("Ukončeno:", 18),
+    ] {
+        current.use_text(label, 10.0, Mm(22.0), Mm(y), &bold);
+        current.use_text(&values[index], 10.0, Mm(66.0), Mm(y), &regular);
+        y -= 8.0;
+    }
+    document
+        .save(&mut BufWriter::new(File::create(destination).map_err(
+            |_| "Hlášení pojistné události se nepodařilo uložit.".to_string(),
+        )?))
+        .map_err(|_| "Hlášení pojistné události se nepodařilo vytvořit.".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,5 +508,29 @@ mod tests {
         assert_eq!(leaked, 0);
         drop(connection);
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn individual_claim_pdf_uses_access_fields() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(r#"
+            CREATE TABLE "Seznam" ("Titul" TEXT,"Příjmení" TEXT,"Jméno" TEXT,"RodnéČíslo" TEXT,
+              "EvČíslo" TEXT,"Adresa" TEXT,"PSČ" TEXT,"Město" TEXT,"Telefon" TEXT,"e-mail" TEXT,
+              "Kategorie" TEXT,"RočPojistné" INTEGER,"PojištěníOd" TEXT,"PojištěníDo" TEXT);
+            INSERT INTO "Seznam" VALUES ('','Novák','Jan','800101/0000','10001','Hlavní 1','110 00','Praha',
+              '+420 123 456 789','test@example.cz','A',320000,'2026-01-01','2026-12-31');
+        "#).unwrap();
+        ensure_schema(&connection).unwrap();
+        connection.execute(r#"INSERT INTO "PojistneUdalosti"("ID","IdentifikatorClena","PojistnyZaznamRowId","PojistnyRok","Telefon","Zamestnavatel","Povolani","VznikPU","OznameniPU","ZjistenaSkoda","PojistnePlneni","PopisUdalosti","Poznamka1","Poznamka2","Ukonceno","ResiPojistovna") VALUES(116,1,1,2026,'+420 123 456 789','Dopravce','Strojvedoucí','2026-06-10','2026-06-11',15000,12000,'Popis události','Poznámka','Doplnění','','Ano')"#, []).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let destination = std::env::var_os("FED_PDF_QA_DIR")
+            .map(std::path::PathBuf::from)
+            .map(|path| path.join("claim-detail.pdf"))
+            .unwrap_or_else(|| directory.path().join("claim-detail.pdf"));
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        export_pdf(&connection, 116, &destination).unwrap();
+        assert!(fs::metadata(destination).unwrap().len() > 1_000);
     }
 }

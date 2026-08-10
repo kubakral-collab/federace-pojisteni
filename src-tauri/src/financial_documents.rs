@@ -58,6 +58,8 @@ pub struct MemberDocumentData {
     pub email: String,
     pub insurance_from: String,
     pub insurance_to: String,
+    pub category: String,
+    pub insurance_limit: i64,
     pub premium: i64,
     pub paid: i64,
 }
@@ -246,10 +248,13 @@ pub fn member_data(
     row_id: i64,
     year: i32,
 ) -> Result<MemberDocumentData, String> {
-    connection.query_row(r#"SELECT rowid,?2,COALESCE(CAST("EvČíslo" AS TEXT),''),TRIM(COALESCE("Titul",'')||' '||COALESCE("Jméno",'')||' '||COALESCE("Příjmení",'')),COALESCE("RodnéČíslo",''),COALESCE("ZO",''),COALESCE("Adresa",''),COALESCE("Město",''),COALESCE("PSČ",''),COALESCE("Stát",''),COALESCE("e-mail",''),COALESCE("PojištěníOd",''),COALESCE("PojištěníDo",''),COALESCE("PojistnáČástka",0),COALESCE("SkutÚhrada",0) FROM "Seznam" WHERE rowid=?1 AND pojisteni_rok("PojištěníOd")=?2"#,params![row_id,year],|r|Ok(MemberDocumentData{row_id:r.get(0)?,year:r.get(1)?,registration:r.get(2)?,name:r.get(3)?,personal_id:r.get(4)?,organization:r.get(5)?,address:r.get(6)?,city:r.get(7)?,postal_code:r.get(8)?,country:r.get(9)?,email:r.get(10)?,insurance_from:r.get(11)?,insurance_to:r.get(12)?,premium:r.get(13)?,paid:r.get(14)?})).map_err(|_|"Podklady dokumentu nebyly nalezeny.".to_string())
+    connection.query_row(r#"SELECT rowid,?2,COALESCE(CAST("EvČíslo" AS TEXT),''),TRIM(COALESCE("Titul",'')||' '||COALESCE("Jméno",'')||' '||COALESCE("Příjmení",'')),COALESCE("RodnéČíslo",''),COALESCE("ZO",''),COALESCE("Adresa",''),COALESCE("Město",''),COALESCE("PSČ",''),COALESCE("Stát",''),COALESCE("e-mail",''),COALESCE("PojištěníOd",''),COALESCE("PojištěníDo",''),COALESCE("Kategorie",''),COALESCE("RočPojistné",0),COALESCE("PojistnáČástka",0),COALESCE("SkutÚhrada",0) FROM "Seznam" WHERE rowid=?1 AND pojisteni_rok("PojištěníOd")=?2"#,params![row_id,year],|r|Ok(MemberDocumentData{row_id:r.get(0)?,year:r.get(1)?,registration:r.get(2)?,name:r.get(3)?,personal_id:r.get(4)?,organization:r.get(5)?,address:r.get(6)?,city:r.get(7)?,postal_code:r.get(8)?,country:r.get(9)?,email:r.get(10)?,insurance_from:r.get(11)?,insurance_to:r.get(12)?,category:r.get(13)?,insurance_limit:r.get(14)?,premium:r.get(15)?,paid:r.get(16)?})).map_err(|_|"Podklady dokumentu nebyly nalezeny.".to_string())
 }
 
 pub fn member_pdf(data: &MemberDocumentData, kind: &str, destination: &Path) -> Result<(), String> {
+    if kind == "application" {
+        return application_pdf(data, destination);
+    }
     let title = match kind {
         "application" => "Přihláška k pojištění",
         "voucher" => "Poštovní poukázka",
@@ -307,6 +312,147 @@ pub fn member_pdf(data: &MemberDocumentData, kind: &str, destination: &Path) -> 
         File::create(destination).map_err(|_| "Dokument se nepodařilo uložit.".to_string())?,
     ))
     .map_err(|_| "Dokument se nepodařilo vytvořit.".to_string())
+}
+
+fn application_pdf(data: &MemberDocumentData, destination: &Path) -> Result<(), String> {
+    let (document, page, layer) = PdfDocument::new("Přihláška", Mm(210.0), Mm(297.0), "Přihláška");
+    let regular = document
+        .add_external_font(
+            File::open(r"C:\Windows\Fonts\arial.ttf")
+                .map_err(|_| "Písmo není dostupné.".to_string())?,
+        )
+        .map_err(|_| "Písmo není dostupné.".to_string())?;
+    let bold = document
+        .add_external_font(
+            File::open(r"C:\Windows\Fonts\arialbd.ttf")
+                .map_err(|_| "Písmo není dostupné.".to_string())?,
+        )
+        .map_err(|_| "Písmo není dostupné.".to_string())?;
+    let current = document.get_page(page).get_layer(layer);
+    current.use_text("P ř i h l á š k a", 16.0, Mm(74.0), Mm(281.0), &bold);
+    current.use_text(
+        "Závazně se přihlašuji k pojištění z odpovědnosti za škody způsobené zaměstnavateli.",
+        9.0,
+        Mm(18.0),
+        Mm(270.0),
+        &regular,
+    );
+    let fields = [
+        ("Příjmení a jméno:", data.name.as_str()),
+        ("Rodné číslo:", data.personal_id.as_str()),
+        ("Bydliště:", data.address.as_str()),
+        ("Město:", data.city.as_str()),
+        ("PSČ:", data.postal_code.as_str()),
+        ("Evidenční číslo:", data.registration.as_str()),
+        ("Organizace:", data.organization.as_str()),
+    ];
+    let mut y = 251.0;
+    for (label, value) in fields {
+        current.use_text(label, 10.0, Mm(22.0), Mm(y), &bold);
+        current.use_text(value, 11.0, Mm(66.0), Mm(y), &regular);
+        current.use_text(
+            "____________________________________________",
+            9.0,
+            Mm(65.0),
+            Mm(y - 1.5),
+            &regular,
+        );
+        y -= 10.0;
+    }
+    current.use_text("Typ pojištění", 11.0, Mm(22.0), Mm(174.0), &bold);
+    let normalized_category = data.category.trim().to_uppercase().replace(' ', "");
+    for (index, (code, option)) in [
+        ("B", "Standard"),
+        ("BZ", "Standard + ztráta"),
+        ("A", "Řidič"),
+        ("AZ", "Řidič + ztráta"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let selected = normalized_category == *code;
+        current.use_text(
+            if selected { "[X]" } else { "[ ]" },
+            10.0,
+            Mm(28.0),
+            Mm(164.0 - index as f32 * 8.0),
+            &regular,
+        );
+        current.use_text(
+            *option,
+            10.0,
+            Mm(38.0),
+            Mm(164.0 - index as f32 * 8.0),
+            &regular,
+        );
+    }
+    current.use_text("Limit pojistného plnění", 11.0, Mm(106.0), Mm(174.0), &bold);
+    for (index, amount) in [200000_i64, 240000, 280000, 320000, 360000, 400000]
+        .iter()
+        .enumerate()
+    {
+        current.use_text(
+            if data.insurance_limit == *amount {
+                "[X]"
+            } else {
+                "[ ]"
+            },
+            10.0,
+            Mm(112.0),
+            Mm(164.0 - index as f32 * 8.0),
+            &regular,
+        );
+        current.use_text(
+            format!("{} Kč", amount),
+            10.0,
+            Mm(122.0),
+            Mm(164.0 - index as f32 * 8.0),
+            &regular,
+        );
+    }
+    current.use_text(
+        format!(
+            "Pojistné období: {} - {}",
+            data.insurance_from, data.insurance_to
+        ),
+        10.0,
+        Mm(22.0),
+        Mm(105.0),
+        &regular,
+    );
+    current.use_text(
+        format!("Roční pojistné: {} Kč", data.premium),
+        10.0,
+        Mm(22.0),
+        Mm(95.0),
+        &regular,
+    );
+    current.use_text(
+        "Prohlašuji, že jsem byl seznámen s pojistnými podmínkami a s roční výší pojistného.",
+        9.0,
+        Mm(22.0),
+        Mm(76.0),
+        &regular,
+    );
+    current.use_text(
+        "Datum: ____________________",
+        10.0,
+        Mm(22.0),
+        Mm(48.0),
+        &regular,
+    );
+    current.use_text(
+        "Podpis: ______________________________",
+        10.0,
+        Mm(112.0),
+        Mm(48.0),
+        &regular,
+    );
+    document
+        .save(&mut BufWriter::new(
+            File::create(destination).map_err(|_| "Dokument se nepodařilo uložit.".to_string())?,
+        ))
+        .map_err(|_| "Dokument se nepodařilo vytvořit.".to_string())
 }
 
 pub fn record_member_document(
@@ -396,6 +542,8 @@ mod tests {
             email: "".into(),
             insurance_from: "2026-01-01".into(),
             insurance_to: "2026-12-31".into(),
+            category: "A".into(),
+            insurance_limit: 320000,
             premium: 1000,
             paid: 200,
         };
@@ -408,5 +556,38 @@ mod tests {
             )
             .unwrap();
         assert_eq!(pair, (2, 1));
+    }
+
+    #[test]
+    fn application_pdf_contains_access_form_sections() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = std::env::var_os("FED_PDF_QA_DIR")
+            .map(std::path::PathBuf::from)
+            .map(|path| path.join("application.pdf"))
+            .unwrap_or_else(|| directory.path().join("application.pdf"));
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let data = MemberDocumentData {
+            row_id: 1,
+            year: 2026,
+            registration: "10001".into(),
+            name: "Jan Novák".into(),
+            personal_id: "800101/0000".into(),
+            organization: "ZO PRAHA".into(),
+            address: "Hlavní 1".into(),
+            city: "Praha".into(),
+            postal_code: "110 00".into(),
+            country: "Česká republika".into(),
+            email: "test@example.cz".into(),
+            insurance_from: "2026-01-01".into(),
+            insurance_to: "2026-12-31".into(),
+            category: "A".into(),
+            insurance_limit: 320000,
+            premium: 1500,
+            paid: 0,
+        };
+        application_pdf(&data, &destination).unwrap();
+        assert!(std::fs::metadata(destination).unwrap().len() > 1_000);
     }
 }

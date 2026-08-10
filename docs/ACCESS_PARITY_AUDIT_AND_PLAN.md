@@ -52,9 +52,10 @@ Proto se stav „funkční parita dokončena“ nahrazuje stavem **částečná 
 | Platby členů | původní součet `SkutÚhrada` zůstává zachován; nové dílčí a organizační platby mají audit | původní evidence neobsahuje datum jednotlivých plateb; převod vytváří technický záznam k 1. lednu; porovnat hromadné workflow OC/ZO | Bezpečně rozšířeno, částečně ověřeno | P1 |
 | Původní faktury/poukázky | tabulka `Faktura` se 4 652 řádky zůstala v SQLite | nová obrazovka čte pouze novou tabulku `VydaneFaktury`, takže historii nezobrazuje; nový model „dodavatel/účet“ nemá dosud prokázanou shodu s významem Accessu | Chybí / významově neověřeno | P0 |
 | Příkazy k úhradě | individuální příkaz, PDF, bankovní údaje a audit; nová dávka CSV | porovnat přesný význam `_Příkaz`, vkládání/vyjímání položek a finanční směr operace | Částečně shodné | P1 |
-| Doklady o zaplacení | třístránkové PDF, dokladová evidence, SMTP, dávkové vytvoření a regresní testy | vizuální porovnání všech variant proti Access sestavám a reálnému tisku | Téměř shodné | P1 |
-| Přihláška, obálka, štítek a poukázka | generování PDF a evidence existují | současné dokumenty jsou obecné PDF; přesné rozložení, pole a tiskové rozměry Accessu nejsou potvrzené snapshoty | Částečně shodné | P1 |
-| Pojistné události – nové | založení, úprava, stav z data ukončení, historický rok, audit a přehled | detailní PDF a přesné workflow „Uložit a zobrazit“ nejsou potvrzené proti Accessu | Částečně shodné | P1 |
+| Doklady o zaplacení | třístránkové PDF, dokladová evidence, SMTP, dávkové vytvoření a regresní testy | aktivní layout je kryt regresním testem; provozní tisk nad konkrétní tiskárnou zůstává uživatelskou akceptací | Provozně shodné | — |
+| Přihláška | původní pole, kategorie, limit, období, pojistné, prohlášení, datum a podpis jsou v PDF a kryté regresním testem | pixelová identita s Access rendererem není cílem | Provozně shodné | — |
+| Poštovní poukázka, obálka a adresní štítek | základní PDF výstupy existují | Product Owner rozhodnutím D-017 vyřadil jejich přesnou tiskovou shodu z cílové parity; další dorovnávání není požadováno | Schváleně mimo cílovou paritu | — |
+| Pojistné události – nové | založení, úprava, stav z data ukončení, historický rok, audit, individuální PDF hlášení a HVP sestava podle referenčního Access PDF | historická data řeší samostatný migrační sprint | Provozně shodné pro nové události | — |
 | Pojistné události – historie | původní `Poj_udalost` se 112 řádky zůstala v SQLite | nová agenda čte pouze prázdnou/novou tabulku `PojistneUdalosti`; původní události nejsou zobrazené | Chybí | P0 |
 | Historická vazba událostí | pro většinu událostí lze dohledat přesný pojistný rok | audit našel případy bez přesné roční vazby, jednu nejednoznačnou vazbu a dvě události bez data; nesmí se přiřadit odhadem | K řízenému dořešení | P1 |
 | Sestavy OC/ZO/HVP a přehledy | parametrické náhledy, PDF/CSV a základní test datasetu | současné PDF je obecná tabulka; varianty, součty, pořadí, hlavičky a tiskový vzhled 31 Access sestav nejsou jednotlivě akceptované | Částečně shodné | P1 |
@@ -109,7 +110,7 @@ Proto se stav „funkční parita dokončena“ nahrazuje stavem **částečná 
 1. Pro všech 31 Access sestav vytvořit matici: aktivní, historická, nahrazená nebo čekající na rozhodnutí.
 2. U aktivních výstupů porovnat zdrojový dataset, filtry, řazení, skupiny, mezisoučty, celkové součty a stránkování.
 3. Renderovat referenční Access PDF a Federace PDF nad stejnými anonymizovanými daty.
-4. Zavést snapshot/regresní testy pro doklad, přihlášku, poukázku, obálku, štítek, událost, OC, ZO a HVP.
+4. Zavést snapshot/regresní testy pro doklad, přihlášku, událost, OC, ZO a HVP. Poštovní poukázka, obálka a adresní štítek jsou rozhodnutím D-017 z přesné tiskové parity vyřazeny.
 5. Zpřístupnit nebo bezpečně označit historickou evidenci 141 vystavených sestav.
 
 ### Fáze 4 — P2 pomocná data a bezpečné náhrady

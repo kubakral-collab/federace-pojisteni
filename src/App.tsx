@@ -1558,6 +1558,7 @@ export default function App() {
   async function saveInvoice(){setFinanceBusy(true);setError("");try{await invoke("create_invoice",{invoice:{...invoiceForm,amount:Number(invoiceForm.amount),constantSymbol:optional(invoiceForm.constantSymbol),specificSymbol:optional(invoiceForm.specificSymbol),note:optional(invoiceForm.note)}});setInvoiceForm({...invoiceForm,supplier:"",variableSymbol:"",amount:"",note:""});await loadInvoices();setNotice("Faktura byla založena.");}catch(message){setError(String(message));}finally{setFinanceBusy(false);}}
   async function exportPaymentBatch(){setFinanceBusy(true);setError("");try{const path=await invoke<string|null>("export_payment_batch");if(path){await loadInvoices();setNotice(`Platební dávka byla uložena do ${path}.`);}}catch(message){setError(String(message));}finally{setFinanceBusy(false);}}
   async function exportMemberDocument(member:Member,kind:"application"|"voucher"|"envelope"|"label"){setError("");try{const path=await invoke<string|null>("export_member_document",{rowId:member.rowId,kind});if(path)setNotice(`Dokument byl uložen do ${path}.`);}catch(message){setError(String(message));}}
+  async function exportClaimDocument(id:number){setError("");try{const path=await invoke<string|null>("export_claim_document",{id});if(path)setNotice(`Hlášení pojistné události bylo uloženo do ${path}.`);}catch(message){setError(String(message));}}
   async function chooseMemberImport(){setImportBusy(true);setError("");try{setImportPreview(await invoke<ImportPreview|null>("choose_member_import"));}catch(message){setError(String(message));}finally{setImportBusy(false);}}
   async function executeMemberImport(){if(!importPreview||importPreview.errors.length)return;setImportBusy(true);setError("");try{const result=await invoke<{inserted:number;skippedDuplicates:number}>("execute_member_import",{source:importPreview.path});setNotice(`Import dokončen: ${result.inserted} vloženo, ${result.skippedDuplicates} duplicit přeskočeno.`);setImportPreview(null);}catch(message){setError(String(message));}finally{setImportBusy(false);}}
   async function loadDiagnostics(){setError("");try{setDiagnostics(await invoke<SystemDiagnostics>("get_system_diagnostics"));}catch(message){setError(String(message));}}
@@ -2243,7 +2244,7 @@ export default function App() {
             <input value={claimOcFilter} onChange={(event) => setClaimOcFilter(event.target.value)} placeholder="Kód OC" />
           </div>
           <div className="claims-table"><table><thead><tr><th>Číslo události</th><th>Člen</th><th>Evidenční číslo</th><th>Kód OC</th><th>Datum vzniku</th><th>Datum nahlášení</th><th>Typ události</th><th>Stav</th><th>Požadovaná částka</th><th>Vyplacená částka</th><th>Poslední změna</th><th>Akce</th></tr></thead><tbody>
-            {visibleClaims.map((claim) => <tr key={claim.id}><td>{claim.id}</td><td>{claim.memberName}</td><td>{claim.registrationNumber}</td><td>{claim.organizationCode}</td><td>{displayDate(claim.occurredOn)}</td><td>{displayDate(claim.reportedOn)}</td><td>{display(claim.description)}</td><td>{claim.status}</td><td>{displayCurrency(claim.assessedDamage)}</td><td>{displayCurrency(claim.insuranceBenefit)}</td><td>{displayDateTime(claim.lastChanged)}</td><td className="row-actions"><button title="Upravit událost" onClick={() => void editAgendaClaim(claim)}><Pencil /></button><button title="Otevřít detail člena" onClick={() => { setScreen("Seznam"); void openMember(claim.memberRowId); }}><Users /></button></td></tr>)}
+            {visibleClaims.map((claim) => <tr key={claim.id}><td>{claim.id}</td><td>{claim.memberName}</td><td>{claim.registrationNumber}</td><td>{claim.organizationCode}</td><td>{displayDate(claim.occurredOn)}</td><td>{displayDate(claim.reportedOn)}</td><td>{display(claim.description)}</td><td>{claim.status}</td><td>{displayCurrency(claim.assessedDamage)}</td><td>{displayCurrency(claim.insuranceBenefit)}</td><td>{displayDateTime(claim.lastChanged)}</td><td className="row-actions"><button title="Uložit hlášení PDF" onClick={() => void exportClaimDocument(claim.id)}><FileText /></button><button title="Upravit událost" onClick={() => void editAgendaClaim(claim)}><Pencil /></button><button title="Otevřít detail člena" onClick={() => { setScreen("Seznam"); void openMember(claim.memberRowId); }}><Users /></button></td></tr>)}
             {!claimsLoading && visibleClaims.length === 0 && <tr><td colSpan={12} className="empty-row">Nebyly nalezeny žádné pojistné události.</td></tr>}
           </tbody></table></div>
         </div>
@@ -3094,7 +3095,7 @@ export default function App() {
                   {role === "Správce" && <button className="action-claim" onClick={() => openClaimForMember(selectedMember)}><Plus /> Nová pojistná událost</button>}
                   <div className="claims-table">
                     <table>
-                      <thead><tr><th>ID</th><th>Rok</th><th>Datum vzniku</th><th>Popis</th><th>Zjištěná škoda</th><th>Plnění</th><th>Stav</th></tr></thead>
+                      <thead><tr><th>ID</th><th>Rok</th><th>Datum vzniku</th><th>Popis</th><th>Zjištěná škoda</th><th>Plnění</th><th>Stav</th><th>Dokument</th></tr></thead>
                       <tbody>
                         {memberClaims.map((claim) => (
                           <tr key={claim.id}>
@@ -3102,10 +3103,11 @@ export default function App() {
                             <td>{display(claim.description)}</td><td>{displayCurrency(claim.assessedDamage)}</td>
                             <td>{displayCurrency(claim.insuranceBenefit)}</td>
                             <td><span className={`claim-status ${claim.status === "Otevřená" ? "open" : "closed"}`}>{claim.status}</span></td>
+                            <td><button title="Uložit hlášení PDF" onClick={() => void exportClaimDocument(claim.id)}><FileText /></button></td>
                           </tr>
                         ))}
-                        {!claimsLoading && memberClaims.length === 0 && <tr><td colSpan={7} className="empty-row">Člen nemá evidovanou pojistnou událost.</td></tr>}
-                        {claimsLoading && <tr><td colSpan={7} className="empty-row">Načítám pojistné události…</td></tr>}
+                        {!claimsLoading && memberClaims.length === 0 && <tr><td colSpan={8} className="empty-row">Člen nemá evidovanou pojistnou událost.</td></tr>}
+                        {claimsLoading && <tr><td colSpan={8} className="empty-row">Načítám pojistné události…</td></tr>}
                       </tbody>
                     </table>
                   </div>

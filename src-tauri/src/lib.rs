@@ -2446,6 +2446,28 @@ fn list_claims(
 }
 
 #[tauri::command]
+fn export_claim_document(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<Option<String>, String> {
+    authenticated_user(&state)?;
+    let path = working_database_path(&app)?;
+    ensure_current_insurance_year(&path)?;
+    let connection = open_read_only(&path)?;
+    let Some(destination) = rfd::FileDialog::new()
+        .set_title("Uložit hlášení pojistné události")
+        .set_file_name(&format!("pojistna-udalost-{id}.pdf"))
+        .add_filter("Dokument PDF", &["pdf"])
+        .save_file()
+    else {
+        return Ok(None);
+    };
+    claims::export_pdf(&connection, id, &destination)?;
+    Ok(Some(destination.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
 fn get_member_audit_history(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -2730,6 +2752,7 @@ pub fn run() {
             execute_member_import,
             list_member_claims,
             list_claims,
+            export_claim_document,
             get_member_audit_history,
             create_claim,
             resolve_claim_insurance,

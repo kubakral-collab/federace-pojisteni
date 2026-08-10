@@ -18,5 +18,7 @@ Konsolidováno 2026-08-02. Rozhodnutí není oficiální, dokud zde není zapsá
 - D-014 (2026-08-10): Product Owner schválil a aktivoval `FEDERACE-PLATBY-02` jako aktuální P1 před dosavadním pořadím. Schválená pravidla rozúčtování: přesná částka se rozdělí podle očekávaného pojistného; nedoplatek pouze ručně se shodným součtem; přeplatek se členům nepřipíše a zůstane nepřiřazený na hlavní platbě.
 - D-015 (2026-08-10): Product Owner schválil `FED-UDALOSTI-HISTORY-01` jako aktuální P1. Autoritativním rokem události je rok data vzniku; chybějící historický záznam musí vyvolat srozumitelnou chybu bez fallbacku.
 - D-016 (2026-08-10): Product Owner schválil navazující `FED-CONTACT-CALC-01` jako P1. Telefon bude textový údaj v pracovním schématu a poměrné pojistné se zaokrouhlí nahoru až po dokončení celého výpočtu.
+- D-017 (2026-08-10): Product Owner rozhodl, že přesná tisková shoda poštovní poukázky, obálky a adresního štítku s Accessem není požadována. Existující základní výstupy se nemažou, ale jejich rozměry, rozmístění a vizuální dorovnání nejsou součástí cílové parity ani sprintu dokumentů.
+- D-018 (2026-08-10): Product Owner schválil `FED-PARITY-DOCUMENTS-01` jako sprint 2 a přesunul jej před migraci historických událostí. Scope tvoří doklad, přihláška, hlášení pojistné události a aktivní sestavy OC/ZO/HVP; poštovní poukázka, obálka a adresní štítek zůstávají podle D-017 mimo scope.
 
 Důvodem rozhodnutí je kontinuita provozu, jednoduchost, ochrana dat a řízený dlouhodobý vývoj.

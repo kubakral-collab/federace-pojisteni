@@ -62,9 +62,9 @@ Všechny doložené funkční oblasti Accessu mají v Tauri aplikaci provozní e
 | FM-18 | Evidence a aktualizace vydaných faktur/poukázek | `Faktury`, `Faktura`, `Faktura_copy`, `Copy_fakt2`, `Copy_faktur`, `Dotaz3`, `KlientDelete` | Kniha faktur s číselnou řadou, bankovními údaji, splatností, stavem, dávkou a auditem | Hotovo | — |
 | FM-19 | Doklad o zaplacení: vytvořit, zobrazit, exportovat PDF, tisknout a odeslat e-mailem | dílčí účel `Doklad_tisk`, makra `Makro2/3` | Agenda Doklady o zaplacení včetně PDF, náhledu, tisku, SMTP a auditu | Hotovo | — |
 | FM-20 | Pojistný doklad/potvrzení a hromadný tisk podle data, OC nebo ZO | `Doklad`, `Doklad_`, `Doklad_1`; sestavy `Doklad`, `Doklad_` | Třístránkové potvrzení a dávkové vytvoření/export podle data, OC a ZO | Hotovo | Opakované vytvoření je idempotentní a export auditovaný. |
-| FM-21 | Přihláška a formulář dat klienta | režimy `Doklad`; `Přihláška`, `Přihláška_`, `Přihláška_Old`, `Form_DataKlientů` | PDF přihláška z detailu člena s evidencí a auditem | Hotovo | — |
-| FM-22 | Obálka, adresní seznamy a poštovní štítky | `AdresPojPodm`, `ObálkaDL`, `NálepkyAdr`, `NálepkyForm`, `NálepkyZO` | PDF obálka a adresní štítek; adresní seznam v centru sestav | Hotovo | — |
-| FM-23 | Poštovní poukázky jednotlivě i dávkově a současný zápis faktury | `PoštPoukázka`; sestavy `PoštPoukázka`, `_`, `_S`; `Dotaz2` | PDF poukázka atomicky propojená s fakturou člena | Hotovo | Vazbu ověřuje automatický test. |
+| FM-21 | Přihláška a formulář dat klienta | režimy `Doklad`; `Přihláška`, `Přihláška_`, `Přihláška_Old`, `Form_DataKlientů` | PDF přihláška z detailu člena s původními poli, kategorií, limitem, prohlášením a auditem | Hotovo | Ověřeno ve `FED-PARITY-DOCUMENTS-01`. |
+| FM-22 | Obálka, adresní seznamy a poštovní štítky | `AdresPojPodm`, `ObálkaDL`, `NálepkyAdr`, `NálepkyForm`, `NálepkyZO` | PDF obálka a adresní štítek; adresní seznam v centru sestav | Nahrazeno | D-017: existující základní výstup zůstává, přesná tisková shoda není požadována. |
+| FM-23 | Poštovní poukázky jednotlivě i dávkově a současný zápis faktury | `PoštPoukázka`; sestavy `PoštPoukázka`, `_`, `_S`; `Dotaz2` | PDF poukázka atomicky propojená s fakturou člena | Nahrazeno | Vazbu ověřuje automatický test; D-017 vyřazuje přesnou tiskovou shodu z cílové parity. |
 | FM-24 | Automatické vytvoření dokladu po způsobilé úhradě | v Accessu ruční vazba úhrady/dokladu | `create_if_eligible` po uložení platby a nastavitelné automatické vytváření | Nahrazeno | Zjednodušení oproti ručnímu Access workflow. |
 
 ### Pojistné události
@@ -75,7 +75,7 @@ Všechny doložené funkční oblasti Accessu mají v Tauri aplikaci provozní e
 | FM-26 | Přehled a detail událostí | `Poj_udalost` a dotaz `test` | Centrální přehled a události v detailu člena | Hotovo | — |
 | FM-27 | Úprava údajů události včetně stavu, škody a plnění | `Poj_Udalost_upr` | Editace události | Hotovo | — |
 | FM-28 | Úprava kontaktního e-mailu při práci s událostí | `Poj_Udalost_mail` | E-mail se upravuje v detailu člena | Nahrazeno | Jediný zdroj kontaktního údaje. |
-| FM-29 | Tisk/zobrazení hlášení pojistné události a souhrnné sestavy | `PojUdálost`, `PojUdálost_sest`; tlačítko „Uložit a zobrazit“ | Filtrovaná HVP/událostní sestava s náhledem, PDF, CSV a auditem | Hotovo | — |
+| FM-29 | Tisk/zobrazení hlášení pojistné události a souhrnné sestavy | `PojUdálost`, `PojUdálost_sest`; tlačítko „Uložit a zobrazit“ | Individuální PDF hlášení z obou agend a filtrovaná HVP sestava s Accessovou strukturou, PDF, CSV a auditem | Hotovo | Vizuálně ověřeno ve `FED-PARITY-DOCUMENTS-01`. |
 
 ### Přehledy, sestavy a exporty
 
