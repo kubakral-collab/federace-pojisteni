@@ -2,7 +2,7 @@
 
 | ID | Název | Priorita | Milestone | Stav | Závislosti | Důvod |
 |---|---|---|---|---|---|---|
-| PARITY-000 | Rozdílový audit produkčního Accessu a `dd.sqlite` | P0 | M1 — Stabilizace Core | Audit odhalil rozpor, čeká na schválení read-only sprintu | potvrzení autoritativního zdroje Product Ownerem | Produkční Access má 14 408 členových řádků, `dd.sqlite` 14 416; před migracemi je nutné přesně určit osm rozdílů. |
+| PARITY-000 | Rozdílový audit produkčního Accessu a `dd.sqlite` | P0 | M1 — Stabilizace Core | Dokončeno; čeká na potvrzení doporučeného zdroje Product Ownerem | budoucí synchronizace vyžaduje samostatný bezpečný migrační sprint | Zjištěno 14 370 přesně shodných řádků, 36 změněných, 2 pouze v Accessu a 10 pouze v SQLite. |
 | PARITY-001 | Zpřístupnění 112 původních pojistných událostí | P0 | M1 — Stabilizace Core | Auditováno, čeká na schválení opravného sprintu | idempotentní migrace; ruční fronta nejasných ročních vazeb | Nová agenda nyní čte jinou tabulku a původní události nezobrazuje. |
 | PARITY-002 | Archiv ročních tabulek 2002–2010 | P0 | M1 — Stabilizace Core | Auditováno, čeká na schválení opravného sprintu | sjednocený read-only model; kontrolní počty 4 386 řádků | Současný Archiv čte pouze `Seznam` a starší roky nejsou uživatelsky dostupné. |
 | PARITY-003 | Původní faktury a význam finančního workflow | P0 | M1 — Stabilizace Core | Auditováno, čeká na schválení opravného sprintu | mapování `Faktura` ↔ nové finanční tabulky; zákaz omylem exportovat historii | Nová kniha nezobrazuje 4 652 původních řádků a její obchodní význam není proti Accessu potvrzen. |

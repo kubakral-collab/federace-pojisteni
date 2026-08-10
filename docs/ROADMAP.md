@@ -31,14 +31,29 @@ Ověřeno proti tagům `v0.17.0`–`v0.21.0`, kódu a testům.
 
 ## Aktuální sprint
 
-### FED-ACCESS-PARITY-AUDIT-01 — Audit funkční shody Access → Federace
+### FED-PARITY-SOURCE-RECONCILE-01 — Rozdílový audit produkčního Accessu a SQLite
 
 - **Milestone:** M1 — Stabilizace Core
-- **Stav:** audit a pracovní plán sepsány; implementace nápravných sprintů nezahájena
-- **Priorita:** P1
-- **Scope:** porovnat zdrojový Access, převedená data a současnou aplikaci; klasifikovat shodu dat, workflow, výpočtů a výstupů; vytvořit prioritizovaný plán bez automatického řešení nejasností.
-- **Výstup:** [ACCESS_PARITY_AUDIT_AND_PLAN.md](ACCESS_PARITY_AUDIT_AND_PLAN.md).
-- **Navržený první navazující sprint:** read-only `FED-PARITY-SOURCE-RECONCILE-01`, protože produkční Access a `dd.sqlite` mají rozdílný počet řádků hlavní evidence; vyžaduje samostatné schválení Product Ownerem. První implementační oprava má následně být `FED-PARITY-CLAIMS-MIGRATION-01`.
+- **Stav:** dokončeno; read-only kontrola je reprodukovatelná a oba zdrojové soubory zůstaly bitově nezměněné
+- **Priorita:** P0
+- **Výsledek:** 14 370 přesně shodných řádků, 36 změněných, 2 pouze v produkčním Accessu a 10 pouze v `dd.sqlite`.
+- **Výstup:** [SOURCE_RECONCILIATION_2026-08-10.md](SOURCE_RECONCILIATION_2026-08-10.md).
+- **Další krok:** zastavit a požádat Product Ownera o potvrzení produkčního Accessu jako autoritativního snímku a schválení `FED-PARITY-CLAIMS-MIGRATION-01`.
+
+## Pořadí sprintů funkční parity
+
+| Pořadí | Sprint | Priorita | Cíl | Stav |
+|---:|---|---|---|---|
+| 1 | `FED-PARITY-SOURCE-RECONCILE-01` | P0 | Read-only rozdílový audit produkčního Accessu a `dd.sqlite`; určit osm rozdílných řádků bez změny dat. | Dokončeno; 14 370 shodných, 36 změněných, 2 pouze Access, 10 pouze SQLite |
+| 2 | `FED-PARITY-CLAIMS-MIGRATION-01` | P0 | Zpřístupnit 112 původních pojistných událostí, zachovat ID a oddělit nejasné historické vazby. | Čeká na schválení po sprintu 1 |
+| 3 | `FED-PARITY-ARCHIVE-LEGACY-01` | P0 | Zpřístupnit 4 386 archivních záznamů z let 2002–2010 v read-only archivu. | Čeká na schválení po sprintu 2 |
+| 4 | `FED-PARITY-INVOICES-LEGACY-01` | P0 | Zpřístupnit 4 652 původních faktur/poukázek a potvrdit význam finančního workflow. | Čeká na schválení po sprintu 3 |
+| 5 | `FED-PARITY-REPORT-HISTORY-01` | P1 | Zpřístupnit historii 141 vystavených sestav. | Čeká na schválení po sprintu 4 |
+| 6 | `FED-PARITY-DOCUMENTS-01` | P1 | Ověřit a dorovnat aktivní dokumenty a sestavy proti Access výstupům. | Čeká na schválení po sprintu 5 |
+| 7 | `FED-PARITY-WORKFLOWS-01` | P1 | Side-by-side ověřit pojištěnce, tarify, platby, příkazy a roční převod. | Čeká na schválení po sprintu 6 |
+| 8 | `FED-PARITY-AUXILIARY-DATA-01` | P2 | Klasifikovat `Seznam_`, `Odklad`, `Břeclav` a externí zdroje bez automatického slučování. | Čeká na schválení po sprintu 7 |
+
+Pořadí může změnit pouze Product Owner. Schválení procesu není automatickým schválením sprintů 2–8.
 
 ## Schválený budoucí scope
 

@@ -42,7 +42,7 @@ Proto se stav „funkční parita dokončena“ nahrazuje stavem **částečná 
 
 | Oblast | Co již máme | Co ještě chybí | Stav | Priorita |
 |---|---|---|---|---|
-| Zdroj pravdy dat | produkční Access má ověřený hash `DF176160…E0DEDC`; SQLite má vlastní převodní report | `dd.sqlite` vznikla z jiné/starší kopie: `Seznam` má 14 416 řádků proti 14 408 v produkčním Accessu; před další migrací je nutný read-only rozdílový report | Blokující rozpor | P0 |
+| Zdroj pravdy dat | produkční Access má ověřený hash `DF176160…E0DEDC`; read-only rozdílový report je dokončen | Product Owner má potvrdit doporučení použít produkční Access jako autoritativní snímek; samotná synchronizace není schválena | Audit dokončen | P0 |
 | Převod zdrojových tabulek | 24 lokálních Access tabulek bylo převedeno do SQLite se shodným počtem řádků a integritou `ok` | ověřit význam pomocných a historických tabulek; dvě externě připojené tabulky nebyly součástí převodu | Částečně shodné | P1 |
 | Aktuální pojištěnci | seznam, detail, založení, editace, hledání, filtry, historie a řízené storno | společný provozní test nad reálnými scénáři Accessu | Téměř shodné | P1 |
 | Archiv 2011–2026 | data v `Seznam`, roční archiv, hledání a detail | validovat neplatná/chybějící data období | Částečně shodné | P1 |
