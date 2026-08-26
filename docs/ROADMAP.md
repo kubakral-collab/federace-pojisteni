@@ -31,14 +31,7 @@ Ověřeno proti tagům `v0.17.0`–`v0.21.0`, kódu a testům.
 
 ## Aktuální sprint
 
-### FED-PARITY-WORKFLOWS-01 — Side-by-side provozní workflow
-
-- **Milestone:** M1 — Stabilizace Core
-- **Stav:** dokončeno, čeká na akceptaci Product Ownerem
-- **Priorita:** P1
-- **Scope:** side-by-side ověřit pojištěnce, tarify a výpočet pojistného, platby, příkazy k úhradě a roční převod proti Access definicím a reálným datům.
-- **Mimo scope:** odložený archiv 2002–2010, původní faktury, pomocné tabulky sprintu 8 a nové produktové workflow.
-- **Další krok po dokončení:** zastavit a požádat Product Ownera o schválení `FED-PARITY-AUXILIARY-DATA-01`.
+Žádný. Sprint 7 byl dokončen a akceptován Product Ownerem. Další sprint musí být samostatně schválen.
 
 ## Pořadí sprintů funkční parity
 
@@ -50,7 +43,7 @@ Ověřeno proti tagům `v0.17.0`–`v0.21.0`, kódu a testům.
 | 4 | `FED-PARITY-ARCHIVE-LEGACY-01` | P0 | Zpřístupnit 4 386 archivních záznamů z let 2002–2010 v read-only archivu. | Přeskočeno rozhodnutím D-020; vráceno do backlogu |
 | 5 | `FED-PARITY-INVOICES-LEGACY-01` | P0 | Zpřístupnit 4 652 původních faktur/poukázek a potvrdit význam finančního workflow. | Přeskočeno rozhodnutím D-021; vráceno do backlogu |
 | 6 | `FED-PARITY-REPORT-HISTORY-01` | P1 | Zpřístupnit historii 141 vystavených sestav. | Dokončeno, otestováno a akceptováno PO |
-| 7 | `FED-PARITY-WORKFLOWS-01` | P1 | Side-by-side ověřit pojištěnce, tarify, platby, příkazy a roční převod. | Dokončeno, otestováno; čeká na akceptaci PO |
+| 7 | `FED-PARITY-WORKFLOWS-01` | P1 | Side-by-side ověřit pojištěnce, tarify, platby, příkazy a roční převod. | Dokončeno, otestováno a akceptováno PO |
 | 8 | `FED-PARITY-AUXILIARY-DATA-01` | P2 | Klasifikovat `Seznam_`, `Odklad`, `Břeclav` a externí zdroje bez automatického slučování. | Čeká na schválení po sprintu 7 |
 
 Pořadí může změnit pouze Product Owner. Schválení procesu není automatickým schválením sprintů 2–8.
@@ -77,7 +70,7 @@ Pořadí může změnit pouze Product Owner. Schválení procesu není automatic
 - **Otevřené rozhodnutí:** pravidla rozúčtování organizační platby vyžadují samostatné schválení Product Ownera; nesmějí být odvozena ani implementována bez něj.
 
 ## Release plán
-Vydané verze jsou v [RELEASES.md](RELEASES.md). **Produkční release `v0.22.0` byl dne 2026-08-10 výslovně schválen Product Ownerem.** Balík zahrnuje dokončení provozní parity Accessu, individuální a organizační platby, historické údaje pojistných událostí, telefon člena a opravu zaokrouhlování poměrného pojistného. Publikace probíhá standardním podepsaným GitHub Actions workflow s testy, EXE/MSI a manifestem Tauri Updateru.
+Vydané verze jsou v [RELEASES.md](RELEASES.md). **Produkční release `v0.23.0` byl dne 2026-08-12 výslovně schválen Product Ownerem.** Balík doplňuje proti `v0.22.0` read-only porovnání produkčních zdrojů, dorovnání aktivních dokumentů, bezpečnou migraci 112 historických pojistných událostí, historii 141 sestav a audit provozních workflow. Publikace probíhá standardním podepsaným GitHub Actions workflow s testy, EXE/MSI a manifestem Tauri Updateru.
 
 Aktivní položky jsou v [BACKLOG.md](BACKLOG.md), neschválené náměty v [PARKING_LOT.md](PARKING_LOT.md).
 

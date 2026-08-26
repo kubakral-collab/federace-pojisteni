@@ -26,5 +26,6 @@ Konsolidováno 2026-08-02. Rozhodnutí není oficiální, dokud zde není zapsá
 - D-022 (2026-08-10): Product Owner schválil `FED-PARITY-REPORT-HISTORY-01` jako aktuální sprint 6 s prioritou P1. Historie 141 záznamů z tabulek `Sestavy` a `SestavyHVP` bude zpřístupněna pouze pro čtení a bez změny původních dat.
 - D-023 (2026-08-10): Product Owner schválil `FED-PARITY-WORKFLOWS-01` jako aktuální sprint 7 s prioritou P1. Side-by-side audit pojištěnců, tarifů, plateb, příkazů a ročního převodu musí proběhnout nad izolovanými kopiemi; implementovat lze pouze jednoznačně prokázané odchylky.
 - D-024 (2026-08-10): Sprint 7 neprokázal novou aplikační chybu. Rozdíly ročních agregací odpovídají již známým rozdílům zdrojových snímků. Roční převod Federace se eviduje jako bezpečná náhrada Access VBA: zachovává obchodní výsledek, ale přidává zálohu, transakci, idempotenci, výjimky a verzované tarify. Historická data ani odložené finanční workflow se bez dalšího schválení nemění.
+- D-025 (2026-08-12): Product Owner akceptoval dokončený sprint 7 a výslovně schválil přípravu i publikaci ostrého release `v0.23.0`. Release obsahuje dokončené parity sprinty od produkčního tagu `v0.22.0`; další produktový sprint se tím automaticky neschvaluje.
 
 Důvodem rozhodnutí je kontinuita provozu, jednoduchost, ochrana dat a řízený dlouhodobý vývoj.
