@@ -31,7 +31,14 @@ Ověřeno proti tagům `v0.17.0`–`v0.21.0`, kódu a testům.
 
 ## Aktuální sprint
 
-Žádný. Sprint 7 byl dokončen a akceptován Product Ownerem. Další sprint musí být samostatně schválen.
+### PLATBY-003 — Oprava částek při hromadném připisování plateb
+
+- **Milestone:** M1 — Stabilizace Core
+- **Stav:** dokončeno a otestováno, čeká na akceptaci Product Ownerem
+- **Priorita:** P1
+- **Scope:** oddělit pojistnou částku od skutečného pojistného, načíst úhradu ze stejného pojistného roku, předvyplnit pouze nezáporný doplatek a zachovat jeho ruční editaci.
+- **Mimo scope:** redesign plateb, nové účetní workflow, přepočet historických dat a databázová migrace.
+- **Výsledek:** pojistná částka, pojistné a úhrada jsou načítány odděleně ze stejného ročního řádku; doplatek je nezáporný a backendově ověřený.
 
 ## Pořadí sprintů funkční parity
 

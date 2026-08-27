@@ -9,8 +9,15 @@ pub struct OrganizationMember {
     pub identifier: String,
     pub name: String,
     pub registration_number: String,
-    pub expected: i64,
+    pub insured_amount: i64,
+    pub premium: i64,
     pub paid: i64,
+}
+
+impl OrganizationMember {
+    pub fn remaining(&self) -> i64 {
+        (self.premium - self.paid).max(0)
+    }
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -87,7 +94,7 @@ pub fn organizations(c: &Connection, year: i32) -> rusqlite::Result<Vec<Organiza
     result
 }
 pub fn members(c: &Connection, org: &str, year: i32) -> rusqlite::Result<Vec<OrganizationMember>> {
-    let mut s=c.prepare(r#"SELECT rowid,COALESCE(CAST("Identifikátor" AS TEXT),''),TRIM(COALESCE("Titul",'')||' '||COALESCE("Příjmení",'')||' '||COALESCE("Jméno",'')),COALESCE(CAST("EvČíslo" AS TEXT),''),COALESCE("RočPojistné",0),COALESCE("SkutÚhrada",0) FROM "Seznam" WHERE CAST(substr("PojištěníOd",1,4) AS INTEGER)=?1 AND NULLIF(TRIM("Ukončení"),'') IS NULL AND TRIM("ZO")=TRIM(?2) ORDER BY CAST("EvČíslo" AS INTEGER),"Příjmení""#)?;
+    let mut s=c.prepare(r#"SELECT rowid,COALESCE(CAST("Identifikátor" AS TEXT),''),TRIM(COALESCE("Titul",'')||' '||COALESCE("Příjmení",'')||' '||COALESCE("Jméno",'')),COALESCE(CAST("EvČíslo" AS TEXT),''),COALESCE("RočPojistné",0),COALESCE("PojistnáČástka",0),COALESCE("SkutÚhrada",0) FROM "Seznam" WHERE CAST(substr("PojištěníOd",1,4) AS INTEGER)=?1 AND NULLIF(TRIM("Ukončení"),'') IS NULL AND TRIM("ZO")=TRIM(?2) ORDER BY CAST("EvČíslo" AS INTEGER),"Příjmení""#)?;
     let result = s
         .query_map(params![year, org], |r| {
             Ok(OrganizationMember {
@@ -95,8 +102,9 @@ pub fn members(c: &Connection, org: &str, year: i32) -> rusqlite::Result<Vec<Org
                 identifier: r.get(1)?,
                 name: r.get(2)?,
                 registration_number: r.get(3)?,
-                expected: r.get(4)?,
-                paid: r.get(5)?,
+                insured_amount: r.get(4)?,
+                premium: r.get(5)?,
+                paid: r.get(6)?,
             })
         })?
         .collect();
@@ -126,13 +134,13 @@ pub fn save(path: &Path, input: OrganizationPaymentInput) -> Result<i64, String>
             .iter()
             .find(|m| m.row_id == a.row_id)
             .ok_or("Rozpis obsahuje člena mimo vybranou organizaci.")?;
-        if a.amount < 0 || a.amount > m.expected {
+        if a.amount < 0 || a.amount > m.remaining() {
             return Err(format!(
-                "Částka u člena {} musí být mezi 0 a jeho pojistným.",
+                "Částka u člena {} musí být mezi 0 a jeho zbývajícím pojistným.",
                 m.name
             ));
         }
-        expected += m.expected;
+        expected += m.remaining();
         allocated += a.amount;
     }
     let over = (input.received_amount - expected).max(0);
@@ -218,9 +226,9 @@ mod tests {
             },
         )
         .unwrap();
-        c.execute_batch(r#"CREATE TABLE "Seznam"("Identifikátor" TEXT,"Titul" TEXT,"Příjmení" TEXT,"Jméno" TEXT,"EvČíslo" INTEGER,"RočPojistné" INTEGER,"SkutÚhrada" INTEGER,"ZO" TEXT,"PojištěníOd" TEXT,"Ukončení" TEXT);
-        INSERT INTO "Seznam" VALUES('A','','Novák','Jan',1,2400,0,'ZO Test','2027-01-01',NULL);
-        INSERT INTO "Seznam" VALUES('B','','Malá','Eva',2,1800,0,'ZO Test','2027-01-01',NULL);"#).unwrap();
+        c.execute_batch(r#"CREATE TABLE "Seznam"("Identifikátor" TEXT,"Titul" TEXT,"Příjmení" TEXT,"Jméno" TEXT,"EvČíslo" INTEGER,"RočPojistné" INTEGER,"PojistnáČástka" INTEGER,"SkutÚhrada" INTEGER,"ZO" TEXT,"PojištěníOd" TEXT,"Ukončení" TEXT);
+        INSERT INTO "Seznam" VALUES('A','','Novák','Jan',1,200000,653,0,'ZO Test','2027-01-01',NULL);
+        INSERT INTO "Seznam" VALUES('B','','Malá','Eva',2,200000,546,0,'ZO Test','2027-01-01',NULL);"#).unwrap();
         drop(c);
         (dir, path)
     }
@@ -234,16 +242,16 @@ mod tests {
                 organization: "ZO Test".into(),
                 received_on: "2027-03-15".into(),
                 insurance_year: 2027,
-                received_amount: 4200,
+                received_amount: 1199,
                 note: None,
                 allocations: vec![
                     AllocationInput {
                         row_id: 1,
-                        amount: 2400,
+                        amount: 653,
                     },
                     AllocationInput {
                         row_id: 2,
-                        amount: 1800,
+                        amount: 546,
                     },
                 ],
             },
@@ -255,7 +263,7 @@ mod tests {
             c.query_row(r#"SELECT SUM("SkutÚhrada") FROM "Seznam""#, [], |r| r
                 .get::<_, i64>(0))
                 .unwrap(),
-            4200
+            1199
         );
     }
 
@@ -268,16 +276,16 @@ mod tests {
                 organization: "ZO Test".into(),
                 received_on: "2027-03-15".into(),
                 insurance_year: 2027,
-                received_amount: 3000,
+                received_amount: 900,
                 note: None,
                 allocations: vec![
                     AllocationInput {
                         row_id: 1,
-                        amount: 2000,
+                        amount: 600,
                     },
                     AllocationInput {
                         row_id: 2,
-                        amount: 500,
+                        amount: 200,
                     },
                 ],
             },
@@ -294,22 +302,50 @@ mod tests {
                 organization: "ZO Test".into(),
                 received_on: "2027-03-15".into(),
                 insurance_year: 2027,
-                received_amount: 5000,
+                received_amount: 1300,
                 note: None,
                 allocations: vec![
                     AllocationInput {
                         row_id: 1,
-                        amount: 2400,
+                        amount: 653,
                     },
                     AllocationInput {
                         row_id: 2,
-                        amount: 1800,
+                        amount: 546,
                     },
                 ],
             },
         )
         .unwrap();
         let c = Connection::open(&path).unwrap();
-        assert_eq!(detail(&c, id).unwrap().payment.unassigned_overpayment, 800);
+        assert_eq!(detail(&c, id).unwrap().payment.unassigned_overpayment, 101);
+    }
+
+    #[test]
+    fn remaining_amount_handles_paid_partial_unpaid_and_overpaid() {
+        let member = |paid| OrganizationMember {
+            row_id: 1,
+            identifier: "A".into(),
+            name: "Test".into(),
+            registration_number: "1".into(),
+            insured_amount: 200_000,
+            premium: 708,
+            paid,
+        };
+        assert_eq!(member(708).remaining(), 0);
+        assert_eq!(member(0).remaining(), 708);
+        assert_eq!(member(300).remaining(), 408);
+        assert_eq!(member(800).remaining(), 0);
+    }
+
+    #[test]
+    fn members_keep_stored_premiums_distinct_from_same_insured_amount() {
+        let (_dir, path) = database();
+        let c = Connection::open(path).unwrap();
+        let rows = members(&c, "ZO Test", 2027).unwrap();
+        assert_eq!(rows[0].insured_amount, 200_000);
+        assert_eq!(rows[1].insured_amount, 200_000);
+        assert_eq!(rows[0].premium, 653);
+        assert_eq!(rows[1].premium, 546);
     }
 }
