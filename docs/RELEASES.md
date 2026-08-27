@@ -9,6 +9,7 @@ Ověřeno z Git tagů a commitů.
 - **v0.21.0:** pojistné události, přehled pro pojišťovnu a další stabilizace dokladů.
 - **v0.22.0:** Product Ownerem schválený produkční balík; dokončení provozní parity Accessu (sestavy, finanční dokumenty, import členů a diagnostika), individuální a organizační platby včetně řízeného rozúčtování, historické pojistné údaje událostí, telefon člena a zaokrouhlení poměrného pojistného nahoru.
 - **v0.23.0:** dorovnání aktivních dokumentů proti Accessu, bezpečné zpřístupnění 112 historických pojistných událostí, read-only historie 141 sestav a opakovatelný audit datové a provozní parity. Odložený archiv 2002–2010 a původní faktury nejsou součástí vydání.
+- **v0.24.0:** oprava hromadného připisování plateb — oddělená pojistná částka, pojistné a úhrada se správným doplatkem — a oprava načítání podkladů dokladu i jeho bezpečného propojení s existující platbou.
 
 ## Aktuální release
-Produkční vydání `v0.23.0` schválil Product Owner dne 2026-08-12. Tag spouští úplné CI testy, podepsaný Windows build, ověření updaterového podpisu a zveřejnění EXE, MSI a `latest.json`.
+Produkční vydání `v0.24.0` schválil Product Owner dne 2026-08-27. Tag spouští úplné CI testy, podepsaný Windows build, ověření updaterového podpisu a zveřejnění EXE, MSI a `latest.json`.

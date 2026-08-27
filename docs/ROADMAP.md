@@ -31,14 +31,7 @@ Ověřeno proti tagům `v0.17.0`–`v0.21.0`, kódu a testům.
 
 ## Aktuální sprint
 
-### DOKLADY-001 — Oprava podkladů a doklad z existující platby
-
-- **Milestone:** M1 — Stabilizace Core
-- **Stav:** dokončeno a otestováno, čeká na akceptaci Product Ownerem
-- **Priorita:** P1
-- **Scope:** opravit načtení podkladů po výběru člena, vytvořit doklad ze skutečné existující platby, zachovat částku a datum platby a zabránit duplicitě podle existující doménové logiky.
-- **Mimo scope:** změny vyhledávání členů, redesign Dokladů, vznik nové finanční transakce a změna pojistného nebo úhrady.
-- **Výsledek:** číselný historický identifikátor se bezpečně načte jako text; doklad používá skutečnou platbu a částku, je transakční a idempotentní.
+Žádný. `DOKLADY-001` byl dokončen a akceptován Product Ownerem. Další sprint musí být samostatně schválen.
 
 ## Pořadí sprintů funkční parity
 
@@ -77,7 +70,7 @@ Pořadí může změnit pouze Product Owner. Schválení procesu není automatic
 - **Otevřené rozhodnutí:** pravidla rozúčtování organizační platby vyžadují samostatné schválení Product Ownera; nesmějí být odvozena ani implementována bez něj.
 
 ## Release plán
-Vydané verze jsou v [RELEASES.md](RELEASES.md). **Produkční release `v0.23.0` byl dne 2026-08-12 výslovně schválen Product Ownerem.** Balík doplňuje proti `v0.22.0` read-only porovnání produkčních zdrojů, dorovnání aktivních dokumentů, bezpečnou migraci 112 historických pojistných událostí, historii 141 sestav a audit provozních workflow. Publikace probíhá standardním podepsaným GitHub Actions workflow s testy, EXE/MSI a manifestem Tauri Updateru.
+Vydané verze jsou v [RELEASES.md](RELEASES.md). **Produkční release `v0.24.0` byl dne 2026-08-27 výslovně schválen Product Ownerem.** Balík obsahuje opravu částek při hromadném připisování plateb a opravu vytvoření dokladu z existující platby. Publikace probíhá standardním podepsaným GitHub Actions workflow s testy, EXE/MSI a manifestem Tauri Updateru.
 
 Aktivní položky jsou v [BACKLOG.md](BACKLOG.md), neschválené náměty v [PARKING_LOT.md](PARKING_LOT.md).
 
