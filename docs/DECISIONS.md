@@ -29,5 +29,7 @@ Konsolidováno 2026-08-02. Rozhodnutí není oficiální, dokud zde není zapsá
 - D-025 (2026-08-12): Product Owner akceptoval dokončený sprint 7 a výslovně schválil přípravu i publikaci ostrého release `v0.23.0`. Release obsahuje dokončené parity sprinty od produkčního tagu `v0.22.0`; další produktový sprint se tím automaticky neschvaluje.
 - D-026 (2026-08-27): Product Owner schválil `PLATBY-003` jako aktuální sprint s prioritou P1 v M1. Oprava smí měnit pouze zdroj, výpočet, validaci a zobrazení částek hromadného připisování plateb; bez migrace dat a redesignu modulu.
 - D-027 (2026-08-27): `PLATBY-003` zachovává původní Access význam sloupců: `RočPojistné` je pojistná částka/limit a `PojistnáČástka` je skutečné pojistné. Historická data se nepřepočítávají ani nemigrují; oprava mění pouze jejich správné použití v organizačních platbách.
+- D-028 (2026-08-27): Product Owner akceptoval `PLATBY-003` a schválil `DOKLADY-001` jako aktuální P1 sprint v M1. Vyhledávání členů zůstává beze změny; opravuje se pouze načtení podkladů a bezpečné vystavení dokladu k existující platbě.
+- D-029 (2026-08-27): `DOKLADY-001` respektuje existující pravidlo jednoho dokladu člena za pojistný rok. Původní souhrnná úhrada bez detailního řádku se při vystavení dokladu propojí přes již zavedený idempotentní technický platební záznam; nevzniká nová finanční hodnota a úhrada člena se nemění.
 
 Důvodem rozhodnutí je kontinuita provozu, jednoduchost, ochrana dat a řízený dlouhodobý vývoj.

@@ -31,14 +31,14 @@ Ověřeno proti tagům `v0.17.0`–`v0.21.0`, kódu a testům.
 
 ## Aktuální sprint
 
-### PLATBY-003 — Oprava částek při hromadném připisování plateb
+### DOKLADY-001 — Oprava podkladů a doklad z existující platby
 
 - **Milestone:** M1 — Stabilizace Core
 - **Stav:** dokončeno a otestováno, čeká na akceptaci Product Ownerem
 - **Priorita:** P1
-- **Scope:** oddělit pojistnou částku od skutečného pojistného, načíst úhradu ze stejného pojistného roku, předvyplnit pouze nezáporný doplatek a zachovat jeho ruční editaci.
-- **Mimo scope:** redesign plateb, nové účetní workflow, přepočet historických dat a databázová migrace.
-- **Výsledek:** pojistná částka, pojistné a úhrada jsou načítány odděleně ze stejného ročního řádku; doplatek je nezáporný a backendově ověřený.
+- **Scope:** opravit načtení podkladů po výběru člena, vytvořit doklad ze skutečné existující platby, zachovat částku a datum platby a zabránit duplicitě podle existující doménové logiky.
+- **Mimo scope:** změny vyhledávání členů, redesign Dokladů, vznik nové finanční transakce a změna pojistného nebo úhrady.
+- **Výsledek:** číselný historický identifikátor se bezpečně načte jako text; doklad používá skutečnou platbu a částku, je transakční a idempotentní.
 
 ## Pořadí sprintů funkční parity
 

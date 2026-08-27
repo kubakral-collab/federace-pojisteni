@@ -1478,7 +1478,8 @@ export default function App() {
       ]);
       setMemberReceipts(loaded);
       setPaymentDocumentBasis(basis);
-    } catch {
+    } catch (message) {
+      console.error("Failed to load document source data", { memberRowId: member.rowId, insuranceYear: insuranceYear(member), endpoint: "get_payment_document_basis", backendMessage: String(message) });
       setPaymentDocumentBasis(null);
       setError("Podklady dokladu se nepodařilo načíst.");
     }
@@ -2907,7 +2908,7 @@ export default function App() {
                 <div><span>Skutečně uhrazeno</span><strong>{displayCurrency(paymentDocumentBasis.paidAmount)}</strong></div>
                 <div><span>Stav</span><strong>{paymentSummary(selectedMember).label}</strong></div>
               </section>}
-              <button className="primary" disabled={saving || !paymentDocumentBasis} onClick={() => void createMemberReceipt(selectedMember)}><Plus /> Vytvořit doklad</button>
+              <button className="primary" disabled={saving || !paymentDocumentBasis?.certificateReady} onClick={() => void createMemberReceipt(selectedMember)}><Plus /> Vytvořit doklad</button>
               <div className="claims-table"><table><thead><tr><th>Datum vystavení</th><th>Datum úhrady</th><th>Rok</th><th>Částka</th><th>Stav</th><th>Akce</th></tr></thead><tbody>
                 {memberReceipts.map((receipt) => <tr key={receipt.id}><td>{displayDate(receipt.issuedOn)}</td><td>{displayDate(receipt.paidOn)}</td><td>{receipt.insuranceYear}</td><td>{displayCurrency(receipt.amount)}</td><td>{receipt.status}</td><td className="row-actions"><button title="Náhled" onClick={() => void receiptAction("open_receipt_pdf", receipt)}><FileText /></button><button title="Tisk" onClick={() => void receiptAction("open_receipt_pdf", receipt, true)}><Printer /></button><button title="Export PDF" onClick={() => void receiptAction("export_receipt_pdf", receipt)}><Upload /></button></td></tr>)}
                 {memberReceipts.length === 0 && <tr><td colSpan={6} className="empty-row">Člen zatím nemá vystavený doklad.</td></tr>}

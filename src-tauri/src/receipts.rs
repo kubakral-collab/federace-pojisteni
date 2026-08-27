@@ -157,7 +157,7 @@ pub fn save_settings(connection: &Connection, settings: &ReceiptSettings) -> Res
 
 fn snapshot(connection: &Connection, row_id: i64, year: i32) -> Result<Snapshot, String> {
     let result = connection.query_row(
-        r#"SELECT COALESCE("Identifikátor",''),COALESCE("Titul",''),COALESCE("Jméno",''),COALESCE("Příjmení",''),
+        r#"SELECT COALESCE(CAST("Identifikátor" AS TEXT),''),COALESCE("Titul",''),COALESCE("Jméno",''),COALESCE("Příjmení",''),
           COALESCE("RodnéČíslo",''),COALESCE(CAST("EvČíslo" AS TEXT),''),COALESCE("ZO",''),COALESCE("Adresa",''),
           COALESCE("Město",''),COALESCE("PSČ",''),COALESCE("Stát",'Česká republika'),COALESCE("Kategorie",''),
           COALESCE("PojištěníOd",''),COALESCE("PojištěníDo",''),COALESCE("RočPojistné",0),COALESCE("PojistnáČástka",0),
@@ -459,14 +459,32 @@ pub fn create_if_eligible(
     let mut connection =
         Connection::open(database).map_err(|_| "Doklad se nepodařilo vytvořit.".to_string())?;
     ensure_schema(&connection).map_err(|_| "Doklad se nepodařilo vytvořit.".to_string())?;
+    crate::member_payments::ensure_schema(&connection)
+        .map_err(|_| "Platbu pro doklad se nepodařilo ověřit.".to_string())?;
     let settings = load_settings(&connection)?;
     if automatic && !settings.automatic_creation {
         return Ok(None);
     }
-    let data = snapshot(&connection, row_id, year)?;
+    let mut data = snapshot(&connection, row_id, year)?;
     validate_required(&data)?;
     if data.paid < data.premium {
         return Ok(None);
+    }
+    if data.payment_id == 0 && data.paid > 0 {
+        let variable_symbol = crate::payments::variable_symbol(&data.personal_id)?;
+        crate::member_payments::bootstrap_legacy_payment(
+            &connection,
+            row_id,
+            &data.identifier,
+            year,
+            &variable_symbol,
+            data.paid,
+        )
+        .map_err(|_| "Existující platbu pro doklad se nepodařilo propojit.".to_string())?;
+        data = snapshot(&connection, row_id, year)?;
+    }
+    if data.payment_id <= 0 || data.paid_on.trim().is_empty() {
+        return Err("Doklad nelze vystavit: chybí evidovaná platba.".into());
     }
     if let Some(id)=connection.query_row(r#"SELECT "Id" FROM "DokladyOUhrade" WHERE "IdentifikatorClena"=?1 AND "PojistnyRok"=?2"#,params![data.identifier,year],|row|row.get(0)).optional().map_err(|_| "Doklad se nepodařilo ověřit.".to_string())? { return Ok(Some(id)); }
     let temp = std::env::temp_dir().join(format!("doklad-{}-{}.pdf", data.identifier, year));
@@ -559,21 +577,16 @@ mod tests {
         connection
             .execute_batch(
                 r#"CREATE TABLE "Seznam" (
-                "Identifikátor" TEXT, "Titul" TEXT, "Jméno" TEXT, "Příjmení" TEXT,
+                "Identifikátor", "Titul" TEXT, "Jméno" TEXT, "Příjmení" TEXT,
                 "RodnéČíslo" TEXT, "EvČíslo" INTEGER, "ZO" TEXT, "Adresa" TEXT,
                 "Město" TEXT, "PSČ" TEXT, "Stát" TEXT, "Kategorie" TEXT,
                 "PojištěníOd" TEXT, "PojištěníDo" TEXT, "PojistnáČástka" INTEGER,
                 "RočPojistné" INTEGER, "SkutÚhrada" INTEGER, "e-mail" TEXT, "KódOC" TEXT
                 , "Ztráta" INTEGER, "Ukončení" TEXT
-            );
-            CREATE TABLE "PlatbyClenu" (
-                "Id" INTEGER PRIMARY KEY AUTOINCREMENT,
-                "PojistnyZaznamRowId" INTEGER NOT NULL,
-                "DatumPrijeti" TEXT NOT NULL,
-                "Castka" INTEGER NOT NULL
             );"#,
             )
             .unwrap();
+        crate::member_payments::ensure_schema(&connection).unwrap();
         connection.execute(
             r#"INSERT INTO "Seznam" VALUES
                ('member-1','Ing.',?1,'Novák','780101/1234',53,'FVČ',?2,'Praha','110 00','Česká republika','B',
@@ -590,7 +603,7 @@ mod tests {
             .unwrap();
         if include_payment {
             connection.execute(
-                r#"INSERT INTO "PlatbyClenu"("PojistnyZaznamRowId","DatumPrijeti","Castka") VALUES(?1,'2026-07-31',781)"#,
+                r#"INSERT INTO "PlatbyClenu"("IdentifikatorClena","PojistnyZaznamRowId","PojistnyRok","DatumPrijeti","Castka","ZpusobUhrady","VariabilniSymbol") VALUES('member-1',?1,2026,'2026-07-31',781,'Bankovní převod','7801011234')"#,
                 [row_id],
             ).unwrap();
         }
@@ -798,7 +811,7 @@ mod tests {
                 [row_id],
             )
             .unwrap();
-        connection.execute(r#"INSERT INTO "PlatbyClenu"("PojistnyZaznamRowId","DatumPrijeti","Castka") VALUES(?1,'2026-03-01',400),(?1,'2026-04-01',381)"#,[row_id]).unwrap();
+        connection.execute(r#"INSERT INTO "PlatbyClenu"("IdentifikatorClena","PojistnyZaznamRowId","PojistnyRok","DatumPrijeti","Castka","ZpusobUhrady","VariabilniSymbol") VALUES('member-1',?1,2026,'2026-03-01',400,'Bankovní převod','7801011234'),('member-1',?1,2026,'2026-04-01',381,'Bankovní převod','7801011234')"#,[row_id]).unwrap();
         let basis = load_basis(&connection, row_id, 2026).unwrap();
         assert_eq!(basis.paid_amount, 781);
         assert_eq!(basis.payment_dates, vec!["2026-03-01", "2026-04-01"]);
@@ -866,5 +879,52 @@ mod tests {
         assert_eq!(basis.registration_number, "1");
         assert_eq!((basis.prescribed_premium, basis.paid_amount), (653, 653));
         assert!(basis.certificate_ready);
+    }
+
+    #[test]
+    fn numeric_legacy_identifier_loads_for_registration_394() {
+        let (_directory, database, row_id) = receipt_database(
+            None,
+            Some("Otakara Jeremiáše 6010"),
+            Some("René"),
+            false,
+        );
+        let connection = Connection::open(database).unwrap();
+        connection.execute(r#"UPDATE "Seznam" SET "Identifikátor"=16831,"Příjmení"='Krkoška',"EvČíslo"=394,"RočPojistné"=600000,"PojistnáČástka"=1502,"SkutÚhrada"=1502 WHERE rowid=?1"#,[row_id]).unwrap();
+        let basis = load_basis(&connection, row_id, 2026).unwrap();
+        assert_eq!(basis.registration_number, "394");
+        assert_eq!(basis.member_name, "Ing. René Krkoška");
+        assert_eq!((basis.prescribed_premium, basis.paid_amount), (1502, 1502));
+        assert!(basis.certificate_ready);
+    }
+
+    #[test]
+    fn legacy_stored_payment_creates_one_linked_receipt_without_changing_total() {
+        let (_directory, database, row_id) = receipt_database(
+            None,
+            Some("Otakara Jeremiáše 6010"),
+            Some("René"),
+            false,
+        );
+        let connection = Connection::open(&database).unwrap();
+        connection.execute(r#"UPDATE "Seznam" SET "Identifikátor"=16831,"Příjmení"='Krkoška',"EvČíslo"=394,"RočPojistné"=600000,"PojistnáČástka"=1502,"SkutÚhrada"=1502 WHERE rowid=?1"#,[row_id]).unwrap();
+        drop(connection);
+
+        let first = create_if_eligible(&database, "tester", row_id, 2026, false)
+            .unwrap()
+            .unwrap();
+        let second = create_if_eligible(&database, "tester", row_id, 2026, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(first, second);
+
+        let connection = Connection::open(database).unwrap();
+        let (receipts, payments, paid, receipt_amount, payment_id): (i64, i64, i64, i64, i64) = connection.query_row(
+            r#"SELECT (SELECT COUNT(*) FROM "DokladyOUhrade"),(SELECT COUNT(*) FROM "PlatbyClenu"),(SELECT "SkutÚhrada" FROM "Seznam" WHERE rowid=?1),(SELECT "Castka" FROM "DokladyOUhrade" LIMIT 1),(SELECT "IdPlatby" FROM "DokladyOUhrade" LIMIT 1)"#,
+            [row_id],
+            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?)),
+        ).unwrap();
+        assert_eq!((receipts, payments, paid, receipt_amount), (1, 1, 1502, 1502));
+        assert!(payment_id > 0);
     }
 }
