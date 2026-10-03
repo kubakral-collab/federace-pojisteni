@@ -121,10 +121,11 @@ pub fn save(path: &Path, input: OrganizationPaymentInput) -> Result<i64, String>
     }
     let mut c = Connection::open(path)
         .map_err(|_| "Organizační platbu se nepodařilo uložit.".to_string())?;
-    ensure_schema(&c)
-        .map_err(|_| "Databázi organizačních plateb se nepodařilo připravit.".to_string())?;
-    crate::member_payments::ensure_schema(&c)
-        .map_err(|_| "Databázi plateb se nepodařilo připravit.".to_string())?;
+    #[cfg(test)]
+    {
+        ensure_schema(&c).unwrap();
+        crate::member_payments::ensure_schema(&c).unwrap();
+    }
     let valid = members(&c, &input.organization, input.insurance_year)
         .map_err(|_| "Členy organizace se nepodařilo ověřit.".to_string())?;
     let mut expected = 0;

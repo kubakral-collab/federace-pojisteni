@@ -109,7 +109,6 @@ pub fn create_invoice(
     user: &str,
     input: InvoiceInput,
 ) -> Result<i64, String> {
-    ensure_schema(connection).map_err(|_| "Knihu faktur se nepodařilo připravit.".to_string())?;
     if input.supplier.trim().is_empty() || input.amount <= 0 {
         return Err("Vyplňte dodavatele a kladnou částku.".into());
     }
@@ -134,7 +133,6 @@ pub fn create_invoice(
 }
 
 pub fn list_invoices(connection: &Connection) -> Result<Vec<Invoice>, String> {
-    ensure_schema(connection).map_err(|_| "Knihu faktur se nepodařilo načíst.".to_string())?;
     let mut s=connection.prepare(r#"SELECT "Id","Cislo","Dodavatel","CisloUctu"||'/'||"KodBanky","VS","Castka","DatumSplatnosti","Stav","DavkaId","Poznamka" FROM "VydaneFaktury" ORDER BY "Id" DESC"#).map_err(|_|"Knihu faktur se nepodařilo načíst.".to_string())?;
     s.query_map([], |r| {
         Ok(Invoice {
@@ -158,7 +156,6 @@ fn csv_field(v: &str) -> String {
     format!("\"{}\"", v.replace('"', "\"\""))
 }
 pub fn prepare_batch(connection: &mut Connection, user: &str) -> Result<BatchResult, String> {
-    ensure_schema(connection).map_err(|_| "Dávku se nepodařilo připravit.".to_string())?;
     let mut s=connection.prepare(r#"SELECT "Id","Cislo","Dodavatel","CisloUctu","KodBanky","VS",COALESCE("KS",''),COALESCE("SS",''),"Castka","DatumSplatnosti" FROM "VydaneFaktury" WHERE "Stav"='PŘIPRAVENA' ORDER BY "DatumSplatnosti","Id""#).map_err(|_|"Dávku se nepodařilo připravit.".to_string())?;
     let rows = s
         .query_map([], |r| {
@@ -462,8 +459,6 @@ pub fn record_member_document(
     kind: &str,
     bytes: &[u8],
 ) -> Result<i64, String> {
-    ensure_schema(connection)
-        .map_err(|_| "Evidenci dokumentu se nepodařilo připravit.".to_string())?;
     let amount = (data.premium - data.paid).max(0);
     let hash = format!("{:x}", Sha256::digest(bytes));
     let prefix = match kind {

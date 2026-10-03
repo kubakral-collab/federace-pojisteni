@@ -66,6 +66,10 @@ jobs:
       - name: Vytvoření prázdného databázového zdroje
         run: python scripts/create-empty-database.py dd.sqlite
 
+      - name: Migrační release gate (A–J + distribuovaný DB zdroj)
+        working-directory: src-tauri
+        run: cargo test --locked --target x86_64-pc-windows-msvc migrations::tests
+
       - name: Rust testy
         working-directory: src-tauri
         run: cargo test --locked --target x86_64-pc-windows-msvc

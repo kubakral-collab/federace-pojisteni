@@ -218,8 +218,8 @@ pub fn record_audit(
     insurance_year: i32,
     output: &str,
 ) -> Result<(), String> {
-    connection
-        .execute_batch(
+    #[cfg(test)]
+    connection.execute_batch(
             r#"CREATE TABLE IF NOT EXISTS "AuditLog" (
             "Id" INTEGER PRIMARY KEY AUTOINCREMENT,
             "DatumČas" TEXT NOT NULL,
@@ -228,8 +228,7 @@ pub fn record_audit(
             "IdentifikátorPojištěnce" TEXT,
             "Výsledek" TEXT NOT NULL
         );"#,
-        )
-        .map_err(|_| "Vytvoření příkazu se nepodařilo zaznamenat.".to_string())?;
+        ).unwrap();
     connection
         .execute(
             r#"INSERT INTO "AuditLog"

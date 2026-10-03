@@ -1,10 +1,12 @@
 mod claims;
+mod applications;
 mod current_insurance_year;
 mod database_backup;
 mod email_service;
 mod financial_documents;
 mod member_import;
 mod member_payments;
+mod migrations;
 mod organization_payments;
 mod payments;
 mod receipts;
@@ -18,6 +20,7 @@ use argon2::{
 use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime};
 use current_insurance_year::CurrentInsuranceYear;
 use rand_core::OsRng;
+use rusqlite::types::ValueRef;
 use rusqlite::{functions::FunctionFlags, params, Connection, OpenFlags, Row, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -39,10 +42,40 @@ struct Session {
     role: String,
 }
 
-#[derive(Default)]
 struct AppState {
     session: Mutex<Session>,
     database_maintenance: Mutex<()>,
+    startup: Mutex<StartupStatus>,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            session: Mutex::new(Session::default()),
+            database_maintenance: Mutex::new(()),
+            startup: Mutex::new(StartupStatus {
+                ready: false,
+                application_version: env!("CARGO_PKG_VERSION").into(),
+                database_schema_version: None,
+                supported_schema_version: migrations::DB_SCHEMA_VERSION,
+                database_path: None,
+                smoke_mode: cfg!(feature = "smoke-test"),
+                failure: None,
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StartupStatus {
+    ready: bool,
+    application_version: String,
+    database_schema_version: Option<i64>,
+    supported_schema_version: i64,
+    database_path: Option<String>,
+    smoke_mode: bool,
+    failure: Option<migrations::MigrationFailure>,
 }
 
 #[derive(Serialize)]
@@ -186,11 +219,124 @@ struct ArchiveYear {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct LegacyTablePage {
+    source: String,
+    columns: Vec<String>,
+    rows: Vec<Vec<String>>,
+    total: i64,
+    page: u32,
+    page_size: u32,
+}
+
+fn legacy_cell(value: ValueRef<'_>) -> String {
+    match value {
+        ValueRef::Null => String::new(),
+        ValueRef::Integer(value) => value.to_string(),
+        ValueRef::Real(value) => value.to_string(),
+        ValueRef::Text(value) => String::from_utf8_lossy(value).into_owned(),
+        ValueRef::Blob(_) => "[binární data]".to_string(),
+    }
+}
+
+fn legacy_table_page(
+    connection: &Connection,
+    source: &str,
+    search: Option<String>,
+    page: u32,
+    page_size: u32,
+) -> Result<LegacyTablePage, String> {
+    const ALLOWED: [&str; 10] = [
+        "2002", "2003", "2004", "2005", "2006", "2007", "2008", "2009", "2010", "Faktura",
+    ];
+    if !ALLOWED.contains(&source) {
+        return Err("Nepovolený historický zdroj.".to_string());
+    }
+    let exists: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+            [source],
+            |row| row.get(0),
+        )
+        .map_err(|_| "Historický zdroj se nepodařilo ověřit.".to_string())?;
+    if !exists {
+        return Err(format!("Historický zdroj {source} v databázi chybí."));
+    }
+
+    let quoted = format!("\"{}\"", source.replace('"', "\"\""));
+    let probe = connection
+        .prepare(&format!("SELECT * FROM {quoted} LIMIT 0"))
+        .map_err(|_| "Historický zdroj se nepodařilo načíst.".to_string())?;
+    let columns = probe
+        .column_names()
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect::<Vec<_>>();
+    let normalized_search = search.unwrap_or_default().trim().to_string();
+    let where_clause = if normalized_search.is_empty() {
+        String::new()
+    } else {
+        let searchable = columns
+            .iter()
+            .map(|column| format!("CAST(\"{}\" AS TEXT) LIKE ?1", column.replace('"', "\"\"")))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        format!(" WHERE {searchable}")
+    };
+    let total: i64 = if normalized_search.is_empty() {
+        connection.query_row(&format!("SELECT COUNT(*) FROM {quoted}"), [], |row| {
+            row.get(0)
+        })
+    } else {
+        connection.query_row(
+            &format!("SELECT COUNT(*) FROM {quoted}{where_clause}"),
+            [format!("%{normalized_search}%")],
+            |row| row.get(0),
+        )
+    }
+    .map_err(|_| "Historické záznamy se nepodařilo spočítat.".to_string())?;
+    let page_size = page_size.clamp(1, 200);
+    let page = page.max(1);
+    let offset = (i64::from(page) - 1) * i64::from(page_size);
+    let sql = format!("SELECT * FROM {quoted}{where_clause} ORDER BY rowid LIMIT ? OFFSET ?");
+    let mut statement = connection
+        .prepare(&sql)
+        .map_err(|_| "Historické záznamy se nepodařilo načíst.".to_string())?;
+    let column_count = columns.len();
+    let map = |row: &Row<'_>| {
+        (0..column_count)
+            .map(|index| row.get_ref(index).map(legacy_cell))
+            .collect::<Result<Vec<_>, _>>()
+    };
+    let rows = if normalized_search.is_empty() {
+        statement.query_map(params![page_size, offset], map)
+    } else {
+        statement.query_map(
+            params![format!("%{normalized_search}%"), page_size, offset],
+            map,
+        )
+    }
+    .map_err(|_| "Historické záznamy se nepodařilo načíst.".to_string())?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|_| "Historické záznamy se nepodařilo načíst.".to_string())?;
+
+    Ok(LegacyTablePage {
+        source: source.to_string(),
+        columns,
+        rows,
+        total,
+        page,
+        page_size,
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DashboardInfo {
     member_count: i64,
     last_registration_number: i64,
     database_date: String,
     program_version: &'static str,
+    database_schema_version: i64,
     active_insurance_year: i32,
     commit_sha: &'static str,
     build_date: &'static str,
@@ -234,6 +380,7 @@ struct SystemDiagnostics {
     database_path: String,
     integrity: String,
     application_version: String,
+    database_schema_version: i64,
     active_year: i32,
     members: i64,
     claims: i64,
@@ -326,9 +473,10 @@ AND (?11 = '' OR (?11 = 'po_splatnosti' AND EXISTS (
       AND prikaz."PojistnyRok" = pojisteni_rok("Seznam"."PojištěníOd")
       AND NULLIF(TRIM(prikaz."DatumSplatnosti"), '') IS NOT NULL
       AND date(prikaz."DatumSplatnosti") < date('now', 'localtime')
-      AND COALESCE("Seznam"."SkutÚhrada", 0) < COALESCE("Seznam"."RočPojistné", 0)
+      AND COALESCE("Seznam"."SkutÚhrada", 0) < COALESCE("Seznam"."PojistnáČástka", 0)
 )))"#;
 
+#[cfg(not(feature = "smoke-test"))]
 fn source_database_path(app: &AppHandle) -> Result<PathBuf, String> {
     let mut candidates = Vec::new();
     if let Ok(directory) = app.path().resource_dir() {
@@ -344,18 +492,90 @@ fn source_database_path(app: &AppHandle) -> Result<PathBuf, String> {
         .ok_or_else(|| "Databázi se nepodařilo načíst.".into())
 }
 
-fn working_database_path(app: &AppHandle) -> Result<PathBuf, String> {
+fn resolve_database_path(
+    smoke_mode: bool,
+    override_path: Option<std::ffi::OsString>,
+    standard_path: &Path,
+    forbidden_roots: &[PathBuf],
+) -> Result<PathBuf, String> {
+    if !smoke_mode {
+        return Ok(standard_path.to_path_buf());
+    }
+
+    let value = override_path.ok_or_else(|| {
+        "Smoke režim vyžaduje FEDERACE_DB_PATH; pracovní databáze nebude otevřena.".to_string()
+    })?;
+    let path = PathBuf::from(value);
+    if !path.is_absolute() {
+        return Err("FEDERACE_DB_PATH musí být absolutní cesta.".into());
+    }
+    if !path.is_file() {
+        return Err("FEDERACE_DB_PATH musí odkazovat na existující kopii databáze.".into());
+    }
+
+    let resolved = fs::canonicalize(&path)
+        .map_err(|_| "FEDERACE_DB_PATH se nepodařilo bezpečně ověřit.".to_string())?;
+    let standard = fs::canonicalize(standard_path).unwrap_or_else(|_| standard_path.to_path_buf());
+    if resolved == standard {
+        return Err("Smoke režim odmítl standardní pracovní databázi.".into());
+    }
+    for root in forbidden_roots {
+        let root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+        if resolved.starts_with(&root) {
+            return Err("Smoke databáze nesmí být umístěna v uživatelském AppData.".into());
+        }
+    }
+    Ok(resolved)
+}
+
+fn working_database_path_with_state(app: &AppHandle) -> Result<(PathBuf, bool), String> {
     let directory = app
         .path()
         .app_data_dir()
         .map_err(|_| "Databázi se nepodařilo načíst.".to_string())?;
+
+    #[cfg(feature = "smoke-test")]
+    {
+        let mut forbidden_roots = Vec::new();
+        // app_data_dir comes from the Windows Known Folder API. Its parent is
+        // therefore authoritative even when APPDATA was overridden in the
+        // launching process (the incident this guard prevents).
+        if let Some(path) = directory.parent() {
+            forbidden_roots.push(path.to_path_buf());
+        }
+        if let Some(path) = std::env::var_os("APPDATA") {
+            forbidden_roots.push(PathBuf::from(path));
+        }
+        if let Some(path) = std::env::var_os("LOCALAPPDATA") {
+            forbidden_roots.push(PathBuf::from(path));
+        }
+        let destination = resolve_database_path(
+            true,
+            std::env::var_os("FEDERACE_DB_PATH"),
+            &directory.join(DATABASE_FILE),
+            &forbidden_roots,
+        )?;
+        println!("SMOKE DATABASE (absolute): {}", destination.display());
+        return Ok((destination, false));
+    }
+
+    #[cfg(not(feature = "smoke-test"))]
+    let destination = resolve_database_path(false, None, &directory.join(DATABASE_FILE), &[])?;
+
+    #[cfg(not(feature = "smoke-test"))]
+    {
     fs::create_dir_all(&directory).map_err(|_| "Databázi se nepodařilo načíst.".to_string())?;
-    let destination = directory.join(DATABASE_FILE);
-    if !destination.exists() {
+    let newly_created = !destination.exists();
+    if newly_created {
         fs::copy(source_database_path(app)?, &destination)
             .map_err(|_| "Databázi se nepodařilo načíst.".to_string())?;
     }
-    Ok(destination)
+    Ok((destination, newly_created))
+    }
+}
+
+fn working_database_path(app: &AppHandle) -> Result<PathBuf, String> {
+    working_database_path_with_state(app).map(|(path, _)| path)
 }
 
 fn open_read_only(path: &Path) -> Result<Connection, String> {
@@ -416,19 +636,10 @@ fn open_write(path: &Path) -> Result<Connection, String> {
 
 fn ensure_current_insurance_year(path: &Path) -> Result<i32, String> {
     let mut connection = open_write(path)?;
-    ensure_member_contact_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
-    tariffs::ensure_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
-    payments::ensure_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
-    payments::ensure_order_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
-    member_payments::ensure_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
-    organization_payments::ensure_schema(&connection)
-        .map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
-    claims::ensure_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
-    email_service::ensure_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
-    receipts::ensure_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
     CurrentInsuranceYear::initialize(&mut connection, path, Local::now().year())
 }
 
+#[cfg(test)]
 fn ensure_member_contact_schema(connection: &Connection) -> rusqlite::Result<()> {
     for table in ["Seznam", "Editace"] {
         let sql = format!(r#"PRAGMA table_info("{table}")"#);
@@ -448,6 +659,7 @@ fn ensure_member_contact_schema(connection: &Connection) -> rusqlite::Result<()>
 }
 
 fn authenticated_user(state: &State<'_, AppState>) -> Result<String, String> {
+    ensure_startup_ready(state)?;
     let session = state
         .session
         .lock()
@@ -459,6 +671,7 @@ fn authenticated_user(state: &State<'_, AppState>) -> Result<String, String> {
 }
 
 fn require_admin(state: &State<'_, AppState>) -> Result<String, String> {
+    ensure_startup_ready(state)?;
     let session = state
         .session
         .lock()
@@ -467,6 +680,12 @@ fn require_admin(state: &State<'_, AppState>) -> Result<String, String> {
         return Err("Ke správě sazeb nemáte oprávnění.".into());
     }
     Ok(session.user.clone())
+}
+
+fn ensure_startup_ready(state: &State<'_, AppState>) -> Result<(), String> {
+    let startup = state.startup.lock().map_err(|_| "Stav databáze není dostupný.".to_string())?;
+    if startup.ready { return Ok(()); }
+    Err(startup.failure.as_ref().map(ToString::to_string).unwrap_or_else(|| "Databáze ještě není připravena.".into()))
 }
 
 fn clean_optional(value: Option<String>) -> Option<String> {
@@ -513,6 +732,7 @@ fn ensure_backup(connection: &Connection, database_path: &Path) -> Result<(), St
     Ok(())
 }
 
+#[cfg(test)]
 fn create_audit_table(connection: &Connection) -> rusqlite::Result<()> {
     connection.execute_batch(
         r#"CREATE TABLE IF NOT EXISTS "AuditLog" (
@@ -528,14 +748,12 @@ fn create_audit_table(connection: &Connection) -> rusqlite::Result<()> {
 
 fn record_error(path: &Path, user: &str, identifier: Option<i64>) {
     if let Ok(connection) = open_write(path) {
-        if create_audit_table(&connection).is_ok() {
-            let _ = connection.execute(
+        let _ = connection.execute(
                 r#"INSERT INTO "AuditLog"
                    ("DatumČas", "Uživatel", "Operace", "IdentifikátorPojištěnce", "Výsledek")
                    VALUES (datetime('now'), ?1, 'INSERT', ?2, 'ERROR')"#,
                 params![user, identifier.map(|value| value.to_string())],
             );
-        }
     }
 }
 
@@ -738,11 +956,9 @@ fn update_current_member_record(
     }
     let termination = parse_date(&member.actual_termination)?;
     let mut connection = open_write(path)?;
-    ensure_member_contact_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
     ensure_backup(&connection, path)?;
     let result = (|| -> rusqlite::Result<()> {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        create_audit_table(&transaction)?;
         let stable_identifier: String = transaction.query_row(
             r#"SELECT CAST("Identifikátor" AS TEXT) FROM "Seznam"
                WHERE rowid = ?1 AND pojisteni_rok("PojištěníOd") = ?2"#,
@@ -905,7 +1121,7 @@ fn overdue_summary(
 ) -> rusqlite::Result<(i64, i64, Option<String>)> {
     connection.query_row(
         r#"SELECT COUNT(*),
-                  COALESCE(SUM(MAX(COALESCE(seznam."RočPojistné", 0) - COALESCE(seznam."SkutÚhrada", 0), 0)), 0),
+                  COALESCE(SUM(MAX(COALESCE(seznam."PojistnáČástka", 0) - COALESCE(seznam."SkutÚhrada", 0), 0)), 0),
                   MIN(prikaz."DatumSplatnosti")
            FROM "PrikazyKUhrade" prikaz
            INNER JOIN "Seznam" seznam ON seznam.rowid = prikaz."PojistnyZaznamRowId"
@@ -913,7 +1129,7 @@ fn overdue_summary(
              AND pojisteni_rok(seznam."PojištěníOd") = ?1
              AND NULLIF(TRIM(prikaz."DatumSplatnosti"), '') IS NOT NULL
              AND date(prikaz."DatumSplatnosti") < date('now', 'localtime')
-             AND COALESCE(seznam."SkutÚhrada", 0) < COALESCE(seznam."RočPojistné", 0)"#,
+             AND COALESCE(seznam."SkutÚhrada", 0) < COALESCE(seznam."PojistnáČástka", 0)"#,
         [insurance_year],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )
@@ -959,8 +1175,6 @@ fn save_to_database(path: &Path, user: &str, input: NewInsured) -> Result<SaveRe
     let (insurance_from, insurance_to) = validate_input(&input)?;
     let months = access_month_count(insurance_from, insurance_to);
     let mut connection = open_write(path)?;
-    ensure_member_contact_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
-    tariffs::ensure_schema(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
     let tariff_date = insurance_from
         .or_else(|| NaiveDate::from_ymd_opt(input.registration_year, 1, 1))
         .ok_or_else(|| "Zkontrolujte datum pojištění.".to_string())?;
@@ -978,7 +1192,6 @@ fn save_to_database(path: &Path, user: &str, input: NewInsured) -> Result<SaveRe
 
     let result = (|| -> rusqlite::Result<SaveResult> {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        create_audit_table(&transaction)?;
         transaction.execute(r#"DELETE FROM "Editace""#, [])?;
 
         let registration_number = last_registration(&transaction, input.registration_year)?.0 + 1;
@@ -1055,19 +1268,6 @@ fn save_to_database(path: &Path, user: &str, input: NewInsured) -> Result<SaveRe
     })
 }
 
-fn ensure_auth_schema(connection: &Connection) -> rusqlite::Result<()> {
-    connection.execute_batch(
-        r#"CREATE TABLE IF NOT EXISTS "AppUsers" (
-            "Id" INTEGER PRIMARY KEY AUTOINCREMENT,
-            "Username" TEXT NOT NULL UNIQUE,
-            "PasswordHash" TEXT NOT NULL,
-            "Role" TEXT NOT NULL,
-            "CreatedAt" TEXT NOT NULL DEFAULT (datetime('now')),
-            "Active" INTEGER NOT NULL DEFAULT 1
-        );"#,
-    )
-}
-
 fn system_username() -> String {
     std::env::var("USERNAME")
         .or_else(|_| std::env::var("USER"))
@@ -1075,8 +1275,6 @@ fn system_username() -> String {
 }
 
 fn auth_initialized(connection: &Connection) -> Result<bool, String> {
-    ensure_auth_schema(connection)
-        .map_err(|_| "Přihlášení se nepodařilo připravit.".to_string())?;
     connection
         .query_row(
             r#"SELECT EXISTS(SELECT 1 FROM "AppUsers" WHERE "Active"=1)"#,
@@ -1091,10 +1289,14 @@ fn initialize_admin_at(path: &Path, password: &str) -> Result<LoginResult, Strin
         return Err("Heslo musí mít alespoň 12 znaků.".into());
     }
     let mut connection = open_write(path)?;
+    #[cfg(test)]
+    connection.execute_batch(r#"CREATE TABLE IF NOT EXISTS "AppUsers" (
+        "Id" INTEGER PRIMARY KEY AUTOINCREMENT, "Username" TEXT NOT NULL UNIQUE,
+        "PasswordHash" TEXT NOT NULL, "Role" TEXT NOT NULL,
+        "CreatedAt" TEXT NOT NULL DEFAULT (datetime('now')), "Active" INTEGER NOT NULL DEFAULT 1
+    );"#).unwrap();
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|_| "Účet správce se nepodařilo vytvořit.".to_string())?;
-    ensure_auth_schema(&transaction)
         .map_err(|_| "Účet správce se nepodařilo vytvořit.".to_string())?;
     let exists: bool = transaction
         .query_row(r#"SELECT EXISTS(SELECT 1 FROM "AppUsers")"#, [], |row| {
@@ -1160,7 +1362,13 @@ fn establish_session(
 }
 
 #[tauri::command]
-fn get_auth_status(app: AppHandle) -> Result<AuthStatus, String> {
+fn get_startup_status(state: State<'_, AppState>) -> Result<StartupStatus, String> {
+    state.startup.lock().map(|status| status.clone()).map_err(|_| "Stav databáze není dostupný.".into())
+}
+
+#[tauri::command]
+fn get_auth_status(app: AppHandle, state: State<'_, AppState>) -> Result<AuthStatus, String> {
+    ensure_startup_ready(&state)?;
     let path = working_database_path(&app)?;
     let connection = open_write(&path)?;
     Ok(AuthStatus {
@@ -1174,6 +1382,7 @@ fn initialize_admin(
     state: State<'_, AppState>,
     password: String,
 ) -> Result<LoginResult, String> {
+    ensure_startup_ready(&state)?;
     let path = working_database_path(&app)?;
     establish_session(&state, initialize_admin_at(&path, &password)?)
 }
@@ -1184,6 +1393,7 @@ fn login(
     password: String,
     state: State<'_, AppState>,
 ) -> Result<LoginResult, String> {
+    ensure_startup_ready(&state)?;
     let path = working_database_path(&app)?;
     establish_session(&state, verify_login_at(&path, &password)?)
 }
@@ -1270,6 +1480,113 @@ fn save_insured(
     let user = authenticated_user(&state)?;
     let path = working_database_path(&app)?;
     save_to_database(&path, &user, insured)
+}
+
+fn application_tariffs(connection: &Connection, date: NaiveDate) -> Result<Vec<(String, bool, i64, i64)>, String> {
+    let mut rows = Vec::new();
+    for category in ["A", "B", "C"] {
+        for loss in [false, true] {
+            for amount in [200_000_i64, 240_000, 280_000, 320_000, 360_000, 400_000] {
+                let rate = tariffs::calculate(connection, category, loss, amount, date, 12)
+                    .map_err(|_| "Aktuální sazby se nepodařilo načíst.".to_string())?
+                    .ok_or_else(|| format!("Chybí aktuální sazba pro kategorii {category}, limit {amount}."))?;
+                rows.push((category.to_string(), loss, amount, rate.premium));
+            }
+        }
+    }
+    Ok(rows)
+}
+
+#[tauri::command]
+fn get_application_options(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    affiliation: String,
+) -> Result<applications::ApplicationOptions, String> {
+    authenticated_user(&state)?;
+    let path = working_database_path(&app)?;
+    ensure_current_insurance_year(&path)?;
+    let connection = open_read_only(&path)?;
+    Ok(applications::ApplicationOptions {
+        organizations: applications::organizations(&connection, &affiliation)
+            .map_err(|_| "Organizace se nepodařilo načíst.".to_string())?,
+        annual_amounts: tariffs::insured_amounts(&connection)
+            .map_err(|_| "Limity pojištění se nepodařilo načíst.".to_string())?,
+    })
+}
+
+#[tauri::command]
+fn export_blank_application(app: AppHandle, state: State<'_, AppState>) -> Result<Option<String>, String> {
+    authenticated_user(&state)?;
+    let path = working_database_path(&app)?;
+    ensure_current_insurance_year(&path)?;
+    let connection = open_write(&path)?;
+    let today = Local::now().date_naive();
+    let rates = application_tariffs(&connection, today)?;
+    let Some(destination) = rfd::FileDialog::new()
+        .set_file_name(&format!("Prazdna_prihlaska_{}.pdf", today.format("%Y-%m-%d")))
+        .add_filter("Dokument PDF", &["pdf"]).save_file() else { return Ok(None); };
+    let payment_settings=payments::load_settings(&connection).map_err(|_|"Údaje Federace se nepodařilo načíst.".to_string())?;
+    let receipt_settings=receipts::load_settings(&connection)?;
+    let data = applications::PdfData { federation_name:if payment_settings.recipient_name.trim().is_empty(){receipt_settings.policyholder}else{payment_settings.recipient_name}, account:format!("{}/{}",payment_settings.account_number,payment_settings.bank_code).trim_matches('/').to_string(), contract_number:receipt_settings.contract_number, registration_number:String::new(), first_name:String::new(), last_name:String::new(), personal_id:String::new(), address:String::new(), city:String::new(), postal_code:String::new(), email:String::new(), category:String::new(), loss:false, annual_amount:0, premium:0, application_date:today.format("%Y-%m-%d").to_string(), blank:true };
+    applications::render_pdf(&data, &rates, &destination)?;
+    Ok(Some(destination.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+fn complete_application(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    application: applications::ApplicationInput,
+) -> Result<applications::ApplicationResult, String> {
+    let user = authenticated_user(&state)?;
+    applications::validate(&application)?;
+    let database = working_database_path(&app)?;
+    let mut connection = open_write(&database)?;
+    ensure_backup(&connection, &database)?;
+    let application_date = Local::now().date_naive();
+    let insurance_from = applications::next_month_start(application_date).ok_or_else(||"Datum počátku pojištění se nepodařilo vypočítat.".to_string())?;
+    let year=insurance_from.year();
+    let insurance_to = NaiveDate::from_ymd_opt(year, 12, 31).unwrap();
+    let months = access_month_count(Some(insurance_from), Some(insurance_to));
+    let tariff = tariffs::calculate(&connection, &application.category, application.loss, application.annual_amount, insurance_from, months)
+        .map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?.ok_or_else(||"Pro zadané údaje není platná aktuální sazba pojistného.".to_string())?;
+    let rates = application_tariffs(&connection, insurance_from)?;
+    let payment_settings=payments::load_settings(&connection).map_err(|_|"Údaje Federace se nepodařilo načíst.".to_string())?;
+    let receipt_settings=receipts::load_settings(&connection)?;
+    let mut pdf_data = applications::PdfData { federation_name:if payment_settings.recipient_name.trim().is_empty(){receipt_settings.policyholder}else{payment_settings.recipient_name}, account:format!("{}/{}",payment_settings.account_number,payment_settings.bank_code).trim_matches('/').to_string(), contract_number:receipt_settings.contract_number, registration_number:String::new(), first_name:application.first_name.trim().into(), last_name:application.last_name.trim().into(), personal_id:application.personal_id.trim().into(), address:application.address.trim().into(), city:application.city.trim().into(), postal_code:application.postal_code.trim().into(), email:application.email.clone().unwrap_or_default().trim().into(), category:application.category.clone(), loss:application.loss, annual_amount:application.annual_amount, premium:tariff.premium, application_date:application_date.format("%Y-%m-%d").to_string(), blank:false };
+    let temp = std::env::temp_dir().join(format!("prihlaska-{}-{}-{}.pdf", application_date.format("%Y%m%d"), std::process::id(), Local::now().timestamp_millis()));
+
+    let outcome = (|| -> Result<(i64,i64,i64),String> {
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
+        let registration_number = last_registration(&transaction, year).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?.0 + 1;
+        let identifier = next_identifier(&transaction).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
+        pdf_data.registration_number=registration_number.to_string();
+        let pdf=applications::render_pdf(&pdf_data,&rates,&temp)?;
+        transaction.execute(r#"INSERT INTO "Seznam"(
+          "Identifikátor","PojištěníOd","PojištěníDo","RočPojistné","PojistnáČástka","Kategorie","Ztráta","KódOC","EvČíslo",
+          "Titul","Příjmení","Jméno","RodnéČíslo","Město","Adresa","PSČ","Stát","Poznámka","OdbPříslušnost","ZO","SkutÚhrada","e-mail","Telefon","Tisk")
+          VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,NULL,?10,?11,?12,?13,?14,?15,'Česká republika',NULL,?16,?17,0,NULLIF(?18,''),NULL,0)"#,
+          params![identifier,sqlite_date(Some(insurance_from)),sqlite_date(Some(insurance_to)),application.annual_amount,tariff.insured_amount.round() as i64,application.category,if application.loss{-1}else{0},application.code.trim(),registration_number,application.last_name.trim(),application.first_name.trim(),application.personal_id.trim(),application.city.trim(),application.address.trim(),application.postal_code.trim(),application.affiliation,application.organization.trim(),application.email.clone().unwrap_or_default().trim()])
+          .map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
+        let row_id=transaction.last_insert_rowid();
+        let application_id=applications::insert_snapshot(&transaction,row_id,identifier,&pdf_data,&insurance_from.format("%Y-%m-%d").to_string(),&pdf)
+            .map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
+        transaction.execute(r#"INSERT INTO "AuditLog"("DatumČas","Uživatel","Operace","IdentifikátorPojištěnce","Výsledek") VALUES(datetime('now'),?1,'PŘIHLÁŠKA + INSERT',?2,'OK')"#,params![user,identifier.to_string()])
+            .map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
+        transaction.commit().map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
+        Ok((application_id,identifier,registration_number))
+    })();
+    let outcome=match outcome { Ok(value)=>value, Err(message)=>{let _=fs::remove_file(&temp);record_error(&database,&user,None);return Err(message);} };
+    Ok(applications::ApplicationResult { application_id:outcome.0, identifier:outcome.1, registration_number:outcome.2, application_date:application_date.format("%Y-%m-%d").to_string(), insurance_from:insurance_from.format("%Y-%m-%d").to_string(), premium:tariff.premium, pdf_path:temp.to_string_lossy().into_owned() })
+}
+
+#[tauri::command]
+fn export_application_snapshot(app:AppHandle,state:State<'_,AppState>,id:i64)->Result<Option<String>,String>{
+    authenticated_user(&state)?; let path=working_database_path(&app)?; let connection=open_read_only(&path)?; let (name,pdf)=applications::snapshot(&connection,id)?;
+    let Some(destination)=rfd::FileDialog::new().set_file_name(&name).add_filter("Dokument PDF", &["pdf"]).save_file() else{return Ok(None)};
+    fs::write(&destination,pdf).map_err(|_|"Přihlášku se nepodařilo uložit.".to_string())?; Ok(Some(destination.to_string_lossy().into_owned()))
 }
 
 #[tauri::command]
@@ -1383,7 +1700,6 @@ fn deactivate_current_member_at(
     reason: &str,
 ) -> Result<(), String> {
     let mut connection = open_write(&path)?;
-    create_audit_table(&connection).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|_| "Storno se nepodařilo zahájit.".to_string())?;
@@ -1434,6 +1750,27 @@ fn list_archive_members(
 }
 
 #[tauri::command]
+fn list_legacy_table(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    source: String,
+    search: Option<String>,
+    page: Option<u32>,
+    page_size: Option<u32>,
+) -> Result<LegacyTablePage, String> {
+    authenticated_user(&state)?;
+    let path = working_database_path(&app)?;
+    let connection = open_read_only(&path)?;
+    legacy_table_page(
+        &connection,
+        &source,
+        search,
+        page.unwrap_or(1),
+        page_size.unwrap_or(100),
+    )
+}
+
+#[tauri::command]
 fn get_dashboard(app: AppHandle, state: State<'_, AppState>) -> Result<DashboardInfo, String> {
     authenticated_user(&state)?;
     let path = working_database_path(&app)?;
@@ -1468,6 +1805,7 @@ fn get_dashboard(app: AppHandle, state: State<'_, AppState>) -> Result<Dashboard
         last_registration_number,
         database_date,
         program_version: env!("CARGO_PKG_VERSION"),
+        database_schema_version: migrations::DB_SCHEMA_VERSION,
         active_insurance_year,
         commit_sha: option_env!("BUILD_COMMIT").unwrap_or("lokální sestavení"),
         build_date: option_env!("BUILD_DATE").unwrap_or("neuvedeno"),
@@ -1549,7 +1887,6 @@ fn save_tariff_rate(
     require_admin(&state)?;
     let path = working_database_path(&app)?;
     let connection = open_write(&path)?;
-    tariffs::ensure_schema(&connection).map_err(|_| "Sazbu se nepodařilo uložit.".to_string())?;
     tariffs::save(&connection, rate)
 }
 
@@ -1665,8 +2002,6 @@ fn save_payment_settings(
     require_admin(&state)?;
     let path = working_database_path(&app)?;
     let connection = open_write(&path)?;
-    payments::ensure_schema(&connection)
-        .map_err(|_| "Platební údaje se nepodařilo uložit.".to_string())?;
     payments::save_settings(&connection, &settings)
 }
 
@@ -1748,7 +2083,6 @@ fn list_payment_organizations(
 ) -> Result<Vec<organization_payments::OrganizationOption>, String> {
     authenticated_user(&state)?;
     let c = open_write(&working_database_path(&app)?)?;
-    organization_payments::ensure_schema(&c).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
     organization_payments::organizations(&c, year)
         .map_err(|_| "Organizace se nepodařilo načíst.".into())
 }
@@ -1783,7 +2117,6 @@ fn list_organization_payments(
 ) -> Result<Vec<organization_payments::OrganizationPayment>, String> {
     authenticated_user(&state)?;
     let c = open_write(&working_database_path(&app)?)?;
-    organization_payments::ensure_schema(&c).map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
     organization_payments::list(&c).map_err(|_| "Organizační platby se nepodařilo načíst.".into())
 }
 #[tauri::command]
@@ -1877,8 +2210,6 @@ fn create_certificate_batch(
     let path = working_database_path(&app)?;
     let year = ensure_current_insurance_year(&path)?;
     let connection = open_write(&path)?;
-    receipts::ensure_schema(&connection)
-        .map_err(|_| "Dávku potvrzení se nepodařilo připravit.".to_string())?;
     let paid_from = filter.paid_from.unwrap_or_default();
     let organization_code = filter.organization_code.unwrap_or_default();
     let organization = filter.organization.unwrap_or_default();
@@ -2348,9 +2679,6 @@ fn get_system_diagnostics(
     let path = working_database_path(&app)?;
     let year = ensure_current_insurance_year(&path)?;
     let connection = open_write(&path)?;
-    financial_documents::ensure_schema(&connection).ok();
-    receipts::ensure_schema(&connection).ok();
-    claims::ensure_schema(&connection).ok();
     let count = |table: &str| {
         connection
             .query_row(&format!("SELECT COUNT(*) FROM \"{table}\""), [], |r| {
@@ -2380,6 +2708,7 @@ fn get_system_diagnostics(
         database_path: path.to_string_lossy().into_owned(),
         integrity,
         application_version: env!("CARGO_PKG_VERSION").into(),
+        database_schema_version: database_backup::current_schema(&path)?,
         active_year: year,
         members: count("Seznam"),
         claims,
@@ -2716,7 +3045,58 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::default())
+        .setup(|app| {
+            let state = app.state::<AppState>();
+            let status = match working_database_path_with_state(app.handle()) {
+                Ok((path, newly_created)) => {
+                    let backup_directory = path.parent().unwrap_or_else(|| Path::new(".")).join("backups").join("migrations");
+                    match migrations::migrate(&path, &backup_directory, newly_created) {
+                        Ok(outcome) => {
+                            if let Some(path) = &outcome.backup_path {
+                                println!("Databázová migrace: ověřená záloha {}", path.display());
+                            }
+                            StartupStatus {
+                                ready: true,
+                                application_version: env!("CARGO_PKG_VERSION").into(),
+                                database_schema_version: Some(outcome.schema_version),
+                                supported_schema_version: migrations::DB_SCHEMA_VERSION,
+                                database_path: Some(path.display().to_string()),
+                                smoke_mode: cfg!(feature = "smoke-test"),
+                                failure: None,
+                            }
+                        },
+                        Err(failure) => StartupStatus {
+                            ready: false,
+                            application_version: env!("CARGO_PKG_VERSION").into(),
+                            database_schema_version: Some(failure.source_version),
+                            supported_schema_version: migrations::DB_SCHEMA_VERSION,
+                            database_path: Some(path.display().to_string()),
+                            smoke_mode: cfg!(feature = "smoke-test"),
+                            failure: Some(failure),
+                        },
+                    }
+                }
+                Err(cause) => StartupStatus {
+                    ready: false,
+                    application_version: env!("CARGO_PKG_VERSION").into(),
+                    database_schema_version: None,
+                    supported_schema_version: migrations::DB_SCHEMA_VERSION,
+                    database_path: None,
+                    smoke_mode: cfg!(feature = "smoke-test"),
+                    failure: Some(migrations::MigrationFailure {
+                        source_version: -1,
+                        target_version: migrations::DB_SCHEMA_VERSION,
+                        failed_migration: "příprava pracovní databáze".into(),
+                        cause,
+                        backup_path: None,
+                    }),
+                },
+            };
+            *state.startup.lock().expect("stav databáze") = status;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
+            get_startup_status,
             get_auth_status,
             initialize_admin,
             login,
@@ -2724,6 +3104,10 @@ pub fn run() {
             calculate_tariff,
             get_form_options,
             save_insured,
+            get_application_options,
+            export_blank_application,
+            complete_application,
+            export_application_snapshot,
             list_members,
             get_member,
             get_current_member,
@@ -2732,6 +3116,7 @@ pub fn run() {
             deactivate_current_member,
             list_archive_years,
             list_archive_members,
+            list_legacy_table,
             get_dashboard,
             get_insurer_overview,
             list_tariff_rates,
@@ -2794,6 +3179,63 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    #[test]
+    fn production_database_selection_ignores_smoke_override() {
+        let standard = PathBuf::from(r"C:\Users\tester\AppData\Roaming\federace\dd.sqlite");
+        let selected = resolve_database_path(
+            false,
+            Some(std::ffi::OsString::from(r"D:\smoke\dd.sqlite")),
+            &standard,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(selected, standard);
+    }
+
+    #[test]
+    fn smoke_database_selection_fails_closed_without_explicit_path() {
+        let error = resolve_database_path(true, None, Path::new("standard.sqlite"), &[])
+            .unwrap_err();
+        assert!(error.contains("FEDERACE_DB_PATH"));
+    }
+
+    #[test]
+    fn smoke_database_selection_rejects_standard_and_appdata_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let appdata = temp.path().join("AppData");
+        let standard = appdata.join("Federace").join(DATABASE_FILE);
+        fs::create_dir_all(standard.parent().unwrap()).unwrap();
+        fs::write(&standard, b"test").unwrap();
+
+        assert!(resolve_database_path(
+            true,
+            Some(standard.clone().into_os_string()),
+            &standard,
+            std::slice::from_ref(&appdata),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn smoke_database_selection_uses_only_explicit_external_copy() {
+        let temp = tempfile::tempdir().unwrap();
+        let appdata = temp.path().join("AppData");
+        let standard = appdata.join("Federace").join(DATABASE_FILE);
+        let smoke = temp.path().join("smoke-data").join("dd-smoke.sqlite");
+        fs::create_dir_all(smoke.parent().unwrap()).unwrap();
+        fs::write(&smoke, b"test").unwrap();
+
+        let selected = resolve_database_path(
+            true,
+            Some(smoke.clone().into_os_string()),
+            &standard,
+            &[appdata],
+        )
+        .unwrap();
+        assert_eq!(selected, fs::canonicalize(smoke).unwrap());
+        assert!(!standard.exists());
+    }
+
     fn create_synthetic_database(path: &Path) {
         let connection = Connection::open(path).unwrap();
         register_insurance_year(&connection).unwrap();
@@ -2844,6 +3286,10 @@ mod tests {
             )
             .unwrap();
         payments::ensure_order_schema(&connection).unwrap();
+        connection.execute_batch(
+            r#"CREATE INDEX "idx_test_Seznam_Identifikator" ON "Seznam"("Identifikátor");
+               CREATE INDEX "idx_test_Seznam_KodOC" ON "Seznam"("KódOC");"#,
+        ).unwrap();
         for index in 1..=60_i64 {
             let personal_id = format!("TEST-{index:04}");
             for year in [2024_i64, 2026_i64] {
@@ -2877,6 +3323,13 @@ mod tests {
                     .unwrap();
             }
         }
+        drop(connection);
+        migrations::migrate(
+            path,
+            &path.parent().unwrap().join("migration-backups"),
+            true,
+        )
+        .unwrap();
     }
 
     fn synthetic_database() -> (tempfile::TempDir, PathBuf) {
@@ -3198,18 +3651,22 @@ mod tests {
     }
 
     #[test]
-    fn overdue_filter_uses_saved_due_date_and_excludes_fully_paid_member() {
+    fn overdue_filter_and_dashboard_use_unpaid_premium_not_insurance_limit() {
         let (_directory, database) = synthetic_database();
         let connection = Connection::open(&database).unwrap();
         register_insurance_year(&connection).unwrap();
         let (row_id, identifier): (i64, String) = connection
             .query_row(
                 r#"SELECT rowid, CAST("Identifikátor" AS TEXT) FROM "Seznam"
-               WHERE pojisteni_rok("PojištěníOd")=2026 AND "SkutÚhrada" < "RočPojistné" LIMIT 1"#,
+               WHERE pojisteni_rok("PojištěníOd")=2026 LIMIT 1"#,
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
+        connection.execute(
+            r#"UPDATE "Seznam" SET "RočPojistné"=320000,"PojistnáČástka"=787,"SkutÚhrada"=197 WHERE rowid=?1"#,
+            [row_id],
+        ).unwrap();
         payments::record_order(
             &connection,
             &identifier,
@@ -3222,7 +3679,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             overdue_summary(&connection, 2026).unwrap(),
-            (1, 200_000, Some("2020-01-01".into()))
+            (1, 590, Some("2020-01-01".into()))
         );
         let overdue = archive_member_page(
             &connection,
@@ -3239,7 +3696,7 @@ mod tests {
         assert_eq!(overdue.total, 1);
         connection
             .execute(
-                r#"UPDATE "Seznam" SET "SkutÚhrada"="RočPojistné" WHERE rowid=?1"#,
+                r#"UPDATE "Seznam" SET "SkutÚhrada"="PojistnáČástka" WHERE rowid=?1"#,
                 [row_id],
             )
             .unwrap();
@@ -3717,5 +4174,30 @@ mod tests {
         assert_eq!(leaked, 0);
         drop(connection);
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn legacy_tables_are_read_only_paginated_and_allowlisted() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE "2002" ("EvČíslo" TEXT, "Příjmení" TEXT);
+                INSERT INTO "2002" VALUES ('1', 'Novák'), ('2', 'Svoboda');
+                CREATE TABLE "Faktura" ("VS" TEXT, "Částka" INTEGER);
+                INSERT INTO "Faktura" VALUES ('1001', 500), ('1002', 700);
+                "#,
+            )
+            .unwrap();
+
+        let archive = legacy_table_page(&connection, "2002", Some("Nov".into()), 1, 100).unwrap();
+        assert_eq!(archive.total, 1);
+        assert_eq!(archive.columns, vec!["EvČíslo", "Příjmení"]);
+        assert_eq!(archive.rows[0], vec!["1", "Novák"]);
+
+        let invoices = legacy_table_page(&connection, "Faktura", None, 1, 1).unwrap();
+        assert_eq!(invoices.total, 2);
+        assert_eq!(invoices.rows.len(), 1);
+        assert!(legacy_table_page(&connection, "VydaneFaktury", None, 1, 100).is_err());
     }
 }

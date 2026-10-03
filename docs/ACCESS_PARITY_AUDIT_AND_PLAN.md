@@ -1,145 +1,113 @@
-# Audit funkční shody Access → Federace a pracovní plán
+# Aktuální stav funkční a datové parity Access → Federace
 
-Datum auditu: 2026-08-10
-Stav: audit zdrojů a statické porovnání dokončeno; implementace nápravných sprintů nezahájena
+Aktualizováno: 2026-08-31
 
-## Cíl
+Ověřená verze: `v0.24.0`
 
-Cílem projektu je provozní náhrada původní databáze Access. Federace musí při stejných vstupních datech zachovat datový význam, výpočty, důležité pracovní postupy a výsledné dokumenty. Nemusí kopírovat technická omezení Accessu, pevná hesla, `SendKeys`, pracovní tabulky ani pevné cesty na disku.
+Stav: funkční oblasti jsou implementované; úplná historická datová parita není dokončena.
 
-Za „shodné“ se považuje pouze chování doložené zdrojem Accessu a ověřené v kódu nebo testu Federace. Pouhá existence podobně nazvané obrazovky nestačí.
+## Jak tento dokument číst
 
-## Auditované zdroje
+Toto je aktuální zdroj pravdy pro stav migrace z Accessu. Rozlišuje tři věci, které starší dokumentace směšovala:
 
-### Původní Access
+1. **Funkční pokrytí** — zda v nové aplikaci existuje provozní ekvivalent funkce Accessu.
+2. **Datová dostupnost** — zda jsou v nové aplikaci uživatelsky dostupné všechny historické záznamy.
+3. **Provozní akceptace** — zda byl scénář vyzkoušen uživatelem na provozní kopii dat a případně na konkrétní tiskárně.
 
-- pracovní kopie `_scope-work/sprint12-audit.accdb`;
-- auditní balíček `_scope-work/access-audit-package`;
-- 33 formulářů, 97 tlačítek, 285 VBA procedur, 5 maker, 35 uložených dotazů, 31 sestav a 26 tabulek;
-- exporty definic, screenshoty návrhového zobrazení a DAO katalog;
-- převodní report `dd_report.json`.
+`FUNCTION_MAP.md` eviduje funkční pokrytí: 30 položek **Hotovo**, 16 **Nahrazeno**, 0 **Chybí**. Neznamená to, že jsou zpřístupněna všechna historická data. Plán a pořadí dalšího vývoje zůstávají v [ROADMAP.md](ROADMAP.md), aktivní práce v [BACKLOG.md](BACKLOG.md) a schválená rozhodnutí v [DECISIONS.md](DECISIONS.md).
 
-### Federace
+## Ověření aktuálního kódu
 
-- frontend `src/App.tsx` a `src/App.css`;
-- backendové moduly v `src-tauri/src`;
-- pracovní SQLite `dd.sqlite`;
-- 58 automatických Rust testů a frontend build verze `v0.22.0`;
-- dosavadní `FUNCTION_MAP.md` a `docs/ACCESS_PARITY_COMPLETION.md`.
+Ověřeno 2026-08-31 nad pracovním stromem verze `v0.24.0`:
 
-## Zásadní korekce předchozího hodnocení
+- `npm.cmd run build` — prošlo;
+- `cargo test --all-targets` — **70 testů prošlo, 0 selhalo**;
+- verze v `package.json`, `src-tauri/Cargo.toml` a `src-tauri/tauri.conf.json` je `0.24.0`.
 
-Předchozí funkční mapa uváděla 30 položek „Hotovo“, 16 „Nahrazeno“ a 0 „Chybí“. Toto hodnocení potvrzovalo hlavně existenci provozního ekvivalentu. Nepotvrzovalo, že:
+## Jednoznačný souhrn
 
-- všechny původní záznamy jsou dostupné v nových obrazovkách;
-- sestavy mají stejné filtry, součty a rozložení;
-- nové finanční modely mají stejný význam jako původní tabulky;
-- všechny pracovní postupy byly ověřeny vedle sebe na stejné kopii dat.
+| Oblast | Funkce | Historická data | Akceptace / rozhodnutí | Celkový stav |
+| --- | --- | --- | --- | --- |
+| Přihlášení, role a navigace | Hotovo | Neuplatní se | Produkčně vydáno | Hotovo |
+| Pojištěnci: seznam, detail, založení, editace, hledání, filtry, historie a storno | Hotovo | `Seznam` dostupný pro roky obsažené ve sjednocené tabulce | Základní workflow vydáno | Hotovo |
+| Tarify a výpočet pojistného | Hotovo, bezpečně nahrazuje pevné Access sazby | Historické částky se nepřepočítávají | Regresní testy prošly | Hotovo |
+| Individuální a organizační platby | Hotovo | Původní součet `SkutÚhrada` zachován | Implementováno; organizační workflow čeká na uživatelský smoke test | Implementováno, čeká smoke test |
+| Příkazy, nová kniha faktur a platební dávky | Hotovo | Původních 4 652 řádků `Faktura` není v nové knize zobrazeno | Historie odložena D-021 | Funkce hotová, historická data chybí |
+| Doklady o zaplacení a pojistná potvrzení | Hotovo | Aktivní data dostupná | Opravy v `v0.24.0` akceptovány | Hotovo |
+| Přihláška | Hotovo | Neuplatní se | Regresní PDF test prošel | Hotovo |
+| Poukázka, obálka a štítek | Základní PDF existuje | Neuplatní se | Přesná tisková shoda vyřazena z cíle rozhodnutím D-017 | Schváleně nahrazeno |
+| Nové pojistné události | Hotovo | Neuplatní se | Regresní testy prošly | Hotovo |
+| Historické pojistné události | Hotovo | Všech 112 řádků dostupných; 98 přesně napojeno, 14 záměrně read-only | Migrační sprint akceptován | Hotovo s označenými nejasnostmi |
+| Sestavy OC/ZO/HVP a provozní přehledy | Hotovo | Aktivní dataset dostupný | Dokumentový sprint akceptován; pixelová identita není cíl | Hotovo |
+| Historie vystavených sestav | Hotovo | Všech 141 řádků dostupných read-only | Sprint akceptován | Hotovo |
+| Roční převod | Hotovo, transakční a se zálohou | Zachovává historii | Side-by-side workflow ověřeno a akceptováno | Hotovo |
+| CSV import členů | Hotovo, bezpečná náhrada pomocných Access tabulek | Externí zdroje nebyly součástí migrace | Potřeba živých vazeb čeká na rozhodnutí | Funkce hotová, externí integrace nerozhodnutá |
+| Zálohy a obnova | Hotovo | Neuplatní se | Automatické testy prošly; provozní obnova čeká na smoke test | Implementováno, čeká smoke test |
+| Archiv 2011–2026 | Hotovo nad tabulkou `Seznam` | Dostupná datovaná období | Testy stránkování a hledání prošly | Hotovo |
+| Archiv 2002–2010 | Čtecí UI pro tyto tabulky chybí | **4 386 řádků zachováno, ale uživatelsky nedostupných** | Odloženo D-020; bez nového schválení neimplementovat | Chybějící historická dostupnost |
+| Pomocné tabulky `Seznam_`, `Odklad`, `Břeclav` | Obecný import existuje | 4 220 + 76 + 23 řádků zachováno, význam nerozhodnut | Čeká na report duplicit a rozhodnutí Product Ownera | K rozhodnutí |
+| Externí `Členská základna` a Excel `Email` | CSV náhrada existuje | Externí zdroje nebyly dodány | Čeká na potvrzení provozní potřeby | K rozhodnutí |
+| Audit citlivých operací | Částečně implementován napříč agendami | Neuplatní se | Sjednocení zůstává v bezpečnostním backlogu | Částečně hotovo |
+| Šifrování databáze SQLCipher | Chybí | Neuplatní se | Schválený budoucí bezpečnostní scope | Plánováno |
+| Bankovní import a automatické párování | Chybí | Neuplatní se | Schválený budoucí scope M2 | Plánováno |
+| Automatické každoroční příkazy a odesílání | Chybí | Neuplatní se | Schválený budoucí scope M2 | Plánováno |
+| UX pořadí menu a velikost písma | Funkčně neblokuje provoz | Neuplatní se | `FEDERACE-MENU-01` schválen a čeká na aktivaci; `FED-UX-FONT-01` čeká na schválení | Plánováno / k rozhodnutí |
 
-Proto se stav „funkční parita dokončena“ nahrazuje stavem **částečná parita, probíhá stabilizační audit a akceptace**.
+## Co je opravdu dokončeno
 
-## Souhrnný stav
+- bezpečné přihlášení, role, navigace a diagnostika;
+- evidence pojištěnců včetně historie, filtrů, sazeb a řízeného storna;
+- individuální a organizační platby včetně rozúčtování;
+- nové finanční dokumenty, platební dávky a příkazy;
+- doklady, potvrzení, přihláška a základní poštovní výstupy;
+- nové i všech 112 původních pojistných událostí;
+- aktivní sestavy OC/ZO/HVP a historie 141 vystavených sestav;
+- bezpečný roční převod;
+- validovaný CSV import;
+- zálohování a obnova;
+- opravy plateb a dokladů vydané v `v0.24.0`.
 
-| Oblast | Co již máme | Co ještě chybí | Stav | Priorita |
-|---|---|---|---|---|
-| Zdroj pravdy dat | produkční Access má ověřený hash `DF176160…E0DEDC`; read-only rozdílový report je dokončen | Product Owner má potvrdit doporučení použít produkční Access jako autoritativní snímek; samotná synchronizace není schválena | Audit dokončen | P0 |
-| Převod zdrojových tabulek | 24 lokálních Access tabulek bylo převedeno do SQLite se shodným počtem řádků a integritou `ok` | ověřit význam pomocných a historických tabulek; dvě externě připojené tabulky nebyly součástí převodu | Částečně shodné | P1 |
-| Aktuální pojištěnci | seznam, detail, založení, editace, hledání, filtry, historie a řízené storno | společný provozní test nad reálnými scénáři Accessu | Téměř shodné | P1 |
-| Archiv 2011–2026 | data v `Seznam`, roční archiv, hledání a detail | validovat neplatná/chybějící data období | Částečně shodné | P1 |
-| Archiv 2002–2010 | zdrojové roční tabulky zůstaly v SQLite | současný Archiv je nečte; 4 386 záznamů není uživatelsky dostupných | Chybí | P0 |
-| Pomocné členské zdroje | `Seznam_` 4 220 řádků, `Odklad` 76 řádků a `Břeclav` 23 řádků jsou zachovány | určit duplicity a provozní význam; neslučovat automaticky | K rozhodnutí | P2 |
-| Tarify a výpočet pojistného | verzované sazby, výpočet délky podle Access logiky, finální zaokrouhlení nahoru a automatické testy; agregátní audit dokončen ve sprintu 7 | historické uložené částky se záměrně nepřepočítávají současným tarifem | Provozně ověřeno; bezpečně nahrazeno | — |
-| Platby členů | původní součet `SkutÚhrada` zůstává zachován; nové dílčí a organizační platby mají audit | původní evidence neobsahuje datum jednotlivých plateb; převod vytváří technický záznam k 1. lednu; porovnat hromadné workflow OC/ZO | Bezpečně rozšířeno, částečně ověřeno | P1 |
-| Původní faktury/poukázky | tabulka `Faktura` se 4 652 řádky zůstala v SQLite | nová obrazovka čte pouze novou tabulku `VydaneFaktury`, takže historii nezobrazuje; nový model „dodavatel/účet“ nemá dosud prokázanou shodu s významem Accessu | Chybí / významově neověřeno | P0 |
-| Příkazy k úhradě | individuální příkaz, PDF, bankovní údaje a audit; nová dávka CSV | porovnat přesný význam `_Příkaz`, vkládání/vyjímání položek a finanční směr operace | Částečně shodné | P1 |
-| Doklady o zaplacení | třístránkové PDF, dokladová evidence, SMTP, dávkové vytvoření a regresní testy | aktivní layout je kryt regresním testem; provozní tisk nad konkrétní tiskárnou zůstává uživatelskou akceptací | Provozně shodné | — |
-| Přihláška | původní pole, kategorie, limit, období, pojistné, prohlášení, datum a podpis jsou v PDF a kryté regresním testem | pixelová identita s Access rendererem není cílem | Provozně shodné | — |
-| Poštovní poukázka, obálka a adresní štítek | základní PDF výstupy existují | Product Owner rozhodnutím D-017 vyřadil jejich přesnou tiskovou shodu z cílové parity; další dorovnávání není požadováno | Schváleně mimo cílovou paritu | — |
-| Pojistné události – nové | založení, úprava, stav z data ukončení, historický rok, audit, individuální PDF hlášení a HVP sestava podle referenčního Access PDF | historická data řeší samostatný migrační sprint | Provozně shodné pro nové události | — |
-| Pojistné události – historie | všech 112 řádků je bezeztrátově archivováno a zobrazeno v nové agendě; 98 přesně napojeno | 14 vazeb zůstává záměrně read-only bez odhadu | Provozně zpřístupněno | — |
-| Historická vazba událostí | 98 přesných vazeb; 2 bez data, 11 bez záznamu přesného roku a 1 nejednoznačná vazba jsou označeny a odděleny | případné ruční dořešení vyžaduje samostatné schválení a podklad | Bezpečně odděleno | P2 |
-| Sestavy OC/ZO/HVP a přehledy | parametrické náhledy, PDF/CSV a základní test datasetu | současné PDF je obecná tabulka; varianty, součty, pořadí, hlavičky a tiskový vzhled 31 Access sestav nejsou jednotlivě akceptované | Částečně shodné | P1 |
-| Historie vystavených sestav | všech 141 řádků z `Sestavy` a `SestavyHVP` je dostupných v samostatné read-only tabulce | historie je záměrně oddělena od nového auditu exportů | Zpřístupněno | — |
-| Roční převod | záloha, transakce, nulová úhrada, nové období, verzované sazby a idempotence; Access definice a reálné agregace byly porovnány ve sprintu 7 | doslovné kopírování pracovních tabulek a sazeb natvrdo není cílem | Bezpečně nahrazeno a ověřeno | — |
-| Import/připojená data | CSV import s náhledem, validací, zálohou a auditem | původní externí `Členská základna` a Excel `Email` nebyly dodány; rozhodnout, zda je živé propojení stále provozní požadavek | Bezpečně nahrazeno / k rozhodnutí | P2 |
-| Zálohy a obnova | ověřené balíčky, kontrola integrity a nouzová záloha | provozní obnovovací zkouška na uživatelské kopii | Lepší než Access, čeká akceptace | P1 |
-| Přihlášení a audit | Argon2id, relace, role a audit citlivých operací | sjednotit zbývající auditní operace podle bezpečnostního backlogu | Bezpečně nahrazeno | P2 |
-| Navigace | všechny hlavní nové agendy jsou dostupné | pořadí menu `UX-001`; nejde o blokaci datové parity | Funkční | P2 |
+## Co opravdu zbývá
+
+### Odložená historická data — vyžadují nové schválení
+
+1. **PARITY-002:** zpřístupnit 4 386 archivních záznamů z let 2002–2010 (D-020).
+2. **PARITY-003:** zpřístupnit 4 652 původních faktur a poukázek odděleně od nové knihy (D-021).
+
+### Rozhodnutí Product Ownera
+
+1. Autoritativní datový snímek byl potvrzen rozhodnutím D-032: produkční Access s hashem `DF176160…E0DEDC`. Rozdílový audit našel 14 370 shodných, 36 změněných, 2 pouze v Accessu a 10 pouze v SQLite; synchronizace nebyla schválena ani provedena.
+2. Určit význam `Seznam_`, `Odklad` a `Břeclav`; data neslučovat automaticky.
+3. Rozhodnout, zda jsou stále potřebné externí vazby `Členská základna` a Excel `Email`.
+4. Schválit pořadí nebo aktivaci návrhů sprintů vypsaných v [ROADMAP.md](ROADMAP.md); UX-002 samostatně čeká na produktové schválení.
+
+### Uživatelské smoke testy
+
+1. organizační platba a její ruční rozúčtování;
+2. historická událost používající pojistný záznam podle data vzniku;
+3. telefon člena a poměrné pojistné zaokrouhlené nahoru;
+4. obnova zálohy na uživatelské kopii;
+5. tisk aktivních PDF na provozní tiskárně, pokud je fyzický výstup součástí běžného procesu.
+
+### Budoucí funkce, nikoli dluh parity Accessu
+
+- automatické každoroční příkazy a odesílání;
+- bankovní import a párování;
+- SQLCipher;
+- úplně sjednocený audit citlivých operací;
+- UX pořadí menu a nastavení velikosti písma.
 
 ## Ověřené datové skutečnosti
 
-- Produkční Access `C:\Users\kubak\Downloads\Pojistka\Pojistka\Pojištění.accdb` existuje a jeho SHA-256 `DF176160A48085BDA225FCAB3D8A9194371E2EBEE43C9EB27CA497D696E0DEDC` přesně odpovídá původnímu auditnímu protokolu.
-- `dd_report.json` dokládá, že `dd.sqlite` vznikla z jiné dřívější kopie Accessu. Převodní report potvrzuje shodné počty řádků vůči této kopii a `PRAGMA integrity_check = ok`, nikoli však úplnou shodu s později auditovaným produkčním souborem.
-- Produkční Access má v `Seznam` 14 408 řádků, zatímco `dd.sqlite` a pracovní `sprint12-audit.accdb` mají 14 416 řádků. Ostatní kontrolované počty (`Poj_udalost` 112, `Faktura` 4 652, `Sestavy` 3, `SestavyHVP` 138, `Odklad` 76, `Seznam_` 4 220 a roky 2002–2010) se shodují.
-- `Seznam` obsahuje převážně období 2011–2026; obsahuje také chybějící a dva zjevně neplatné roky, které vyžadují report kvality dat.
-- Roční tabulky 2002–2010 obsahují celkem 4 386 záznamů a nejsou součástí současného archivního dotazu.
-- `Poj_udalost` obsahuje 112 původních událostí. Nová tabulka `PojistneUdalosti` se vytváří odděleně bez migrace původních řádků.
-- `Poj_udalost_` obsahuje 9 řádků s ID 1–9; stejná ID existují v hlavní tabulce, proto se nesmějí automaticky přidat jako nové události.
-- `Faktura` obsahuje 4 652 původních řádků. Nová tabulka `VydaneFaktury` vzniká odděleně bez migrace nebo společného read-only pohledu.
-- `Sestavy` a `SestavyHVP` obsahují dohromady 141 historických záznamů, které nový audit sestav nepřebírá.
-- Původní Access neměl telefon v tabulce člena `Seznam`; telefon byl pouze u pojistné události. Telefon člena je schválené rozšíření, nikoli původní parita.
+- Auditovaný produkční Access měl 14 408 řádků `Seznam`; pracovní SQLite 14 416.
+- Rozdílový audit: 14 370 přesně shodných, 36 změněných, 2 pouze v Accessu a 10 pouze v SQLite.
+- Roční tabulky 2002–2010 obsahují 4 386 řádků.
+- Původní `Faktura` obsahuje 4 652 řádků.
+- Původních pojistných událostí je 112; všechny jsou zpřístupněny, 14 bez bezpečně prokazatelné přesné vazby zůstává read-only.
+- `Sestavy` a `SestavyHVP` obsahují dohromady 141 historických záznamů; všechny jsou zpřístupněny read-only.
+- `Seznam_` obsahuje 4 220, `Odklad` 76 a `Břeclav` 23 řádků.
+- Původní externí tabulky nebyly součástí lokální migrace.
 
-## Pracovní plán
+## Závěr
 
-### Fáze 0 — Zmrazení rozsahu a důkazů
-
-1. `FED-PARITY-SOURCE-RECONCILE-01`: vytvořit read-only rozdílový report produkčního Accessu proti `dd.sqlite`, zejména přesně identifikovat osm rozdílných řádků `Seznam`; bez automatické změny kteréhokoli souboru.
-2. Product Owner potvrdí, která databáze a časový okamžik jsou autoritativním zdrojem pro další migraci.
-3. Uchovat kontrolní SHA-256 potvrzeného Access zdroje a `dd.sqlite`.
-4. Pro všechny opravné testy používat pracovní kopie; zdrojové soubory nikdy neměnit.
-5. Vytvořit anonymizované fixture scénáře odvozené z reálných struktur.
-6. Každou odchylku navázat na formulář, dotaz, VBA proceduru nebo sestavu Accessu.
-
-### Fáze 1 — P0 dostupnost historických dat
-
-1. `FED-PARITY-CLAIMS-MIGRATION-01`: bezpečně a idempotentně zpřístupnit všech 112 událostí; zachovat původní ID a všechna pole; nejasné roční vazby označit, neodhadovat.
-2. `FED-PARITY-ARCHIVE-LEGACY-01`: zpřístupnit roky 2002–2010 v jednotném read-only Archivu; zachovat původní názvy polí a kontrolní počty 4 386.
-3. `FED-PARITY-INVOICES-LEGACY-01`: zpřístupnit 4 652 původních faktur/poukázek a oddělit jejich význam od nových finančních záznamů; historické řádky nesmějí vstoupit do nové dávky omylem.
-4. Pro každý převod dodat report: zdrojový počet, cílový počet, přeskočené/nejednoznačné řádky, kontrolní součty a idempotence.
-
-### Fáze 2 — P1 obchodní logika a workflow
-
-1. Pojištěnci: tabulka scénářů založení, editace, ukončení, hledání a filtrů proti Accessu.
-2. Tarify: golden testy pro každou pojistnou částku, kategorii, ztrátu, celý rok i poměrnou část roku.
-3. Platby: potvrdit význam hromadné úhrady OC/ZO, nedoplatku, přeplatku a návaznosti na doklady.
-4. Finance: přesně popsat rozdíl mezi Access `Faktura`, formulářem `Faktury`, `_Příkaz` a novými `VydaneFaktury`/`PlatebniDavky`.
-5. Roční převod: spustit oba systémy na izolované kopii stejného roku a porovnat počty, osoby, sazby, období, ukončení a nulové úhrady.
-
-### Fáze 3 — P1 dokumenty a sestavy
-
-1. Pro všech 31 Access sestav vytvořit matici: aktivní, historická, nahrazená nebo čekající na rozhodnutí.
-2. U aktivních výstupů porovnat zdrojový dataset, filtry, řazení, skupiny, mezisoučty, celkové součty a stránkování.
-3. Renderovat referenční Access PDF a Federace PDF nad stejnými anonymizovanými daty.
-4. Zavést snapshot/regresní testy pro doklad, přihlášku, událost, OC, ZO a HVP. Poštovní poukázka, obálka a adresní štítek jsou rozhodnutím D-017 z přesné tiskové parity vyřazeny.
-5. Zpřístupnit nebo bezpečně označit historickou evidenci 141 vystavených sestav.
-
-### Fáze 4 — P2 pomocná data a bezpečné náhrady
-
-1. Porovnat `Seznam_`, `Odklad`, `Břeclav` a aktivní `Seznam` podle identifikátoru, rodného a evidenčního čísla; vytvořit pouze report, ne automatický merge.
-2. Rozhodnout o externích zdrojích `Členská základna` a `Email`.
-3. Potvrdit Product Ownerem bezpečné náhrady: autentizace, zálohy, CSV místo XLS/RTF/DOC, transakce místo pracovních tabulek a řízené storno místo hard delete.
-4. Teprve po uzavření parity pokračovat v čistě nových UX funkcích `UX-001` a `UX-002`.
-
-## Povinné akceptační brány
-
-Každý opravný sprint musí splnit:
-
-- původní zdrojová data zůstala bitově nezměněná;
-- migrace je idempotentní a má kontrolní součty;
-- žádný nejasný řádek není přiřazen odhadem;
-- stejný scénář dává v Accessu a Federaci stejný obchodní výsledek;
-- rozdílný technický postup je písemně označen jako bezpečná náhrada;
-- automatické testy, frontend build a uživatelský smoke test prošly;
-- Product Owner schválil případné záměrné rozdíly.
-
-## Rozhodnutí vyžadující Product Ownera
-
-1. Mají být `Seznam_`, `Odklad` a `Břeclav` pouze archivní důkaz, nebo aktivní zdroj dat?
-2. Je živé propojení na externí `Členská základna` a Excel e-mailů stále potřebné?
-3. Které historické varianty sestav `Old`, osobní sestavy a RTF/DOC exporty se stále provozně používají?
-4. Jak ručně vyřešit události bez jednoznačného pojistného záznamu daného roku?
-5. Je schváleno zachovat bezpečné modernizace místo doslovného kopírování rizikového chování Accessu?
-
-## Doporučené pořadí
-
-Dokud nejsou uzavřeny Fáze 0–3, je hlavní produktová priorita **M1 — funkční a datová shoda Accessu**. Nové UX a automatizace zůstávají v Backlogu. První sprint má být read-only `FED-PARITY-SOURCE-RECONCILE-01`; teprve po potvrzení autoritativního zdroje následuje `FED-PARITY-CLAIMS-MIGRATION-01`.
+Aplikace je funkční náhradou hlavních Access workflow a aktuální vydání prochází automatickými kontrolami. Projekt ale nelze označit za úplně datově uzavřený, dokud Product Owner nerozhodne o odloženém archivu, původních fakturách, pomocných tabulkách a autoritativním datovém snímku. Tyto položky nesmějí být skryty tvrzením `0 Chybí` z funkční mapy.

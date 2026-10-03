@@ -20,9 +20,6 @@ impl CurrentInsuranceYear {
         database_path: &Path,
         calendar_year: i32,
     ) -> Result<i32, String> {
-        Self::ensure_phone_column(connection)
-            .map_err(|_| "Pojistné období se nepodařilo načíst.")?;
-        Self::create_schema(connection).map_err(|_| "Pojistné období se nepodařilo načíst.")?;
         Self::seed_periods(connection).map_err(|_| "Pojistné období se nepodařilo načíst.")?;
         let active =
             Self::active(connection).map_err(|_| "Pojistné období se nepodařilo načíst.")?;
@@ -33,32 +30,6 @@ impl CurrentInsuranceYear {
         Self::roll_forward(connection, active, calendar_year)
             .map_err(|_| "Nové pojistné období se nepodařilo vytvořit.")?;
         Ok(calendar_year)
-    }
-
-    fn ensure_phone_column(connection: &Connection) -> rusqlite::Result<()> {
-        let exists = connection
-            .prepare(r#"PRAGMA table_info("Seznam")"#)?
-            .query_map([], |row| row.get::<_, String>(1))?
-            .filter_map(Result::ok)
-            .any(|name| name == "Telefon");
-        if !exists {
-            connection.execute(r#"ALTER TABLE "Seznam" ADD COLUMN "Telefon" TEXT"#, [])?;
-        }
-        Ok(())
-    }
-
-    fn create_schema(connection: &Connection) -> rusqlite::Result<()> {
-        connection.execute_batch(
-            r#"CREATE TABLE IF NOT EXISTS "PojistnaObdobi" (
-                   "Rok" INTEGER PRIMARY KEY,
-                   "Stav" TEXT NOT NULL CHECK ("Stav" IN ('AKTIVNI', 'UZAVRENO')),
-                   "Vytvoreno" TEXT NOT NULL DEFAULT (datetime('now'))
-               );
-               CREATE TABLE IF NOT EXISTS "NeprevadetCleny" (
-                   "RodneCislo" TEXT PRIMARY KEY,
-                   "Duvod" TEXT
-               );"#,
-        )
     }
 
     fn seed_periods(connection: &Connection) -> rusqlite::Result<()> {

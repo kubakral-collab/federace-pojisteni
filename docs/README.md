@@ -12,7 +12,7 @@ Interní desktopová aplikace nahrazující evidenci v MS Accessu pro jednoho sp
 `ROADMAP.md` je jediný zdroj pravdy pro plán vývoje. `DECISIONS.md` je zdroj pravdy pro schválená rozhodnutí Product Ownera.
 
 ## Produktové řízení
-[Vize](PRODUCT_VISION.md) · [Roadmapa](ROADMAP.md) · [Backlog](BACKLOG.md) · [Parking Lot](PARKING_LOT.md) · [Rozhodnutí](DECISIONS.md) · [Pravidla práce](CONTRIBUTING.md)
+[Vize](PRODUCT_VISION.md) · [Roadmapa](ROADMAP.md) · [Aktuální stav parity Accessu](ACCESS_PARITY_AUDIT_AND_PLAN.md) · [Backlog](BACKLOG.md) · [Parking Lot](PARKING_LOT.md) · [Rozhodnutí](DECISIONS.md) · [Pravidla práce](CONTRIBUTING.md)
 
 ## Technická dokumentace
 [Architektura](ARCHITECTURE.md) · [Databáze](DATABASE.md) · [Testování](TESTING.md) · [UI](UI_GUIDELINES.md) · [Přihlášení](authentication.md)

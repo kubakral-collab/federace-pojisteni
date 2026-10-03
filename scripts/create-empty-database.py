@@ -33,6 +33,8 @@ CREATE TABLE "Seznam" (
   "Tisk" INTEGER NOT NULL DEFAULT 0,
   "DatumTisku" TEXT
 );
+CREATE INDEX "idx_Seznam_Identifikátor" ON "Seznam"("Identifikátor");
+CREATE INDEX "idx_Seznam_KódOC" ON "Seznam"("KódOC");
 CREATE TABLE "Editace" (
   "PojištěníOd" TEXT, "PojištěníDo" TEXT, "RočPojistné" INTEGER,
   "Kategorie" TEXT, "Ztráta" INTEGER NOT NULL DEFAULT 0,

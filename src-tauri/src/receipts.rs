@@ -137,7 +137,6 @@ pub fn ensure_schema(connection: &Connection) -> rusqlite::Result<()> {
 }
 
 pub fn load_settings(connection: &Connection) -> Result<ReceiptSettings, String> {
-    ensure_schema(connection).map_err(|_| "Nastavení dokladů se nepodařilo načíst.".to_string())?;
     connection.query_row(
         r#"SELECT "AutomatickeVytvareni","AutomatickeOdesilani","PredmetEmailu","TextEmailu","Pojistnik","CisloSmlouvy" FROM "NastaveniDokladu" WHERE "Id"=1"#,
         [], |row| Ok(ReceiptSettings { automatic_creation: row.get::<_,i64>(0)? != 0, automatic_sending: row.get::<_,i64>(1)? != 0, email_subject: row.get(2)?, email_body: row.get(3)?, policyholder: row.get(4)?, contract_number: row.get(5)? })
@@ -145,7 +144,6 @@ pub fn load_settings(connection: &Connection) -> Result<ReceiptSettings, String>
 }
 
 pub fn save_settings(connection: &Connection, settings: &ReceiptSettings) -> Result<(), String> {
-    ensure_schema(connection).map_err(|_| "Nastavení dokladů se nepodařilo uložit.".to_string())?;
     if settings.contract_number.trim().is_empty() {
         return Err("Vyplňte číslo pojistné smlouvy.".into());
     }
@@ -439,7 +437,6 @@ pub fn list(
     member_row_id: Option<i64>,
     search: &str,
 ) -> Result<Vec<Receipt>, String> {
-    ensure_schema(connection).map_err(|_| "Doklady se nepodařilo načíst.".to_string())?;
     let pattern = format!("%{}%", search.trim());
     let mut statement=connection.prepare(r#"SELECT "Id","PojistnyZaznamRowId","IdentifikatorClena","IdPlatby","EvidencniCislo","JmenoClena","PojistnyRok","DatumUhrady","DatumVystaveni","Castka","CisloSmlouvy","Stav","StavEmailu","DatumOdeslani","EmailPrijemce","Sha256" FROM "DokladyOUhrade" WHERE (?1 IS NULL OR "PojistnyZaznamRowId"=?1) AND (?2='' OR "JmenoClena" LIKE ?3 COLLATE NOCASE OR "EvidencniCislo" LIKE ?3 OR CAST("PojistnyRok" AS TEXT) LIKE ?3 OR COALESCE("EmailPrijemce",'') LIKE ?3 COLLATE NOCASE) ORDER BY "DatumVystaveni" DESC,"Id" DESC"#).map_err(|_| "Doklady se nepodařilo načíst.".to_string())?;
     let rows = statement
@@ -458,9 +455,6 @@ pub fn create_if_eligible(
 ) -> Result<Option<i64>, String> {
     let mut connection =
         Connection::open(database).map_err(|_| "Doklad se nepodařilo vytvořit.".to_string())?;
-    ensure_schema(&connection).map_err(|_| "Doklad se nepodařilo vytvořit.".to_string())?;
-    crate::member_payments::ensure_schema(&connection)
-        .map_err(|_| "Platbu pro doklad se nepodařilo ověřit.".to_string())?;
     let settings = load_settings(&connection)?;
     if automatic && !settings.automatic_creation {
         return Ok(None);
@@ -535,7 +529,6 @@ pub fn pdf(connection: &Connection, id: i64) -> Result<(String, Vec<u8>), String
 pub fn send(database: &Path, user: &str, id: i64) -> Result<(), String> {
     let connection =
         Connection::open(database).map_err(|_| "Doklad se nepodařilo odeslat.".to_string())?;
-    ensure_schema(&connection).map_err(|_| "Doklad se nepodařilo odeslat.".to_string())?;
     let settings = load_settings(&connection)?;
     let (recipient,name,pdf,identifier):(String,String,Vec<u8>,String)=connection.query_row(r#"SELECT COALESCE("EmailPrijemce",''),printf('Doklad_%d_%s.pdf',"PojistnyRok",replace("EvidencniCislo",' ','')),"Pdf","IdentifikatorClena" FROM "DokladyOUhrade" WHERE "Id"=?1"#,[id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).map_err(|_|"Doklad se nepodařilo načíst.".to_string())?;
     if recipient.trim().is_empty() {

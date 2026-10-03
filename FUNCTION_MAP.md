@@ -1,6 +1,6 @@
 # Funkční mapa migrace Access → Tauri
 
-> **Historická implementační mapa.** Stav „Hotovo/Nahrazeno“ zde znamená existenci funkčního ekvivalentu, nikoli potvrzenou úplnou datovou a provozní shodu. Aktuální audit, zjištěné mezery a pracovní plán jsou závazně vedeny v `docs/ACCESS_PARITY_AUDIT_AND_PLAN.md`.
+> **Historická implementační mapa funkčního pokrytí.** Stav „Hotovo/Nahrazeno“ znamená existenci funkčního ekvivalentu, nikoli úplnou dostupnost všech historických dat ani uživatelskou akceptaci. Aktuální stav verze `v0.24.0`, skutečně zbývající historická data a čekající smoke testy jsou vedeny v `docs/ACCESS_PARITY_AUDIT_AND_PLAN.md`.
 
 ## Účel a metodika
 

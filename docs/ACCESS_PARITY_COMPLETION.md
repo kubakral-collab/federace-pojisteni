@@ -1,6 +1,6 @@
 # Dokončení funkční parity Access → Tauri
 
-> **Historický implementační záznam, nikoli aktuální potvrzení úplné parity.** Následný audit odhalil nezpřístupněná historická data a neověřené výstupy. Aktuální stav a závazný pracovní plán jsou v [ACCESS_PARITY_AUDIT_AND_PLAN.md](ACCESS_PARITY_AUDIT_AND_PLAN.md).
+> **Historický implementační záznam, nikoli aktuální potvrzení úplné parity.** Aktuální stav k verzi `v0.24.0`, včetně odložených historických dat a čekajících akceptací, je v [ACCESS_PARITY_AUDIT_AND_PLAN.md](ACCESS_PARITY_AUDIT_AND_PLAN.md). Počty testů níže platí pouze k datu tohoto historického záznamu.
 
 Datum ověření: 2026-08-05
 

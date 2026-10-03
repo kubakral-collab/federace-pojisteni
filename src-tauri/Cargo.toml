@@ -1,13 +1,20 @@
 [package]
 name = "pojisteni-klienti"
-version = "0.24.0"
+version = "0.25.0"
 description = "Pojištění — funkční parita původní Access aplikace"
 authors = ["Federace pojištění"]
 edition = "2021"
+default-run = "pojisteni-klienti"
 
 [lib]
 name = "pojisteni_klienti_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = []
+# Fail-closed database selection for local release smoke tests. Production builds
+# do not compile the environment-variable override at all.
+smoke-test = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

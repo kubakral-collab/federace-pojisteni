@@ -24,6 +24,13 @@ dd.sqlite-wal
 *.accdb
 *.mdb
 *.laccdb
+smoke-data/
+output/
+tmp/
+docs.zip
+kontakty.md
+__pycache__/
+*.pyc
 
 # Local forensic exports can contain production metadata and personal data.
 _scope-work/

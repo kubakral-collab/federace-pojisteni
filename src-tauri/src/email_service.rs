@@ -63,7 +63,6 @@ fn credential(name: &str) -> Result<keyring::Entry, String> {
 }
 
 pub fn load(connection: &Connection) -> Result<EmailSettings, String> {
-    ensure_schema(connection).map_err(|_| "Nastavení e-mailu se nepodařilo načíst.".to_string())?;
     let mut settings = connection
         .query_row(
             r#"SELECT "Server", "Port", "UzivatelskeJmeno", "EmailOdesilatele",
@@ -105,7 +104,6 @@ pub fn save(connection: &Connection, input: SaveEmailSettings) -> Result<(), Str
     if credential_name.is_empty() {
         return Err("Vyplňte název zabezpečeného záznamu hesla.".into());
     }
-    ensure_schema(connection).map_err(|_| "Nastavení e-mailu se nepodařilo uložit.".to_string())?;
     connection
         .execute(
             r#"UPDATE "EmailNastaveni" SET "Server"=?1,"Port"=?2,"UzivatelskeJmeno"=?3,

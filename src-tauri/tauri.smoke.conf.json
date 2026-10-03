@@ -1,0 +1,14 @@
+{
+  "productName": "Pojištění Smoke",
+  "identifier": "cz.federacepojisteni.klientsky-prehled.smoke",
+  "app": {
+    "windows": [
+      {
+        "title": "Pojištění — Smoke"
+      }
+    ]
+  },
+  "bundle": {
+    "active": false
+  }
+}

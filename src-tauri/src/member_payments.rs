@@ -172,9 +172,11 @@ pub fn save(
     validate(&input)?;
     let mut connection =
         Connection::open(database).map_err(|_| "Platbu se nepodařilo uložit.".to_string())?;
-    ensure_schema(&connection).map_err(|_| "Platbu se nepodařilo uložit.".to_string())?;
-    crate::organization_payments::ensure_schema(&connection)
-        .map_err(|_| "Platbu se nepodařilo uložit.".to_string())?;
+    #[cfg(test)]
+    {
+        ensure_schema(&connection).unwrap();
+        crate::organization_payments::ensure_schema(&connection).unwrap();
+    }
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|_| "Platbu se nepodařilo uložit.".to_string())?;
@@ -230,9 +232,11 @@ pub fn delete(
 ) -> Result<(), String> {
     let mut connection =
         Connection::open(database).map_err(|_| "Platbu se nepodařilo odstranit.".to_string())?;
-    ensure_schema(&connection).map_err(|_| "Platbu se nepodařilo odstranit.".to_string())?;
-    crate::organization_payments::ensure_schema(&connection)
-        .map_err(|_| "Platbu se nepodařilo odstranit.".to_string())?;
+    #[cfg(test)]
+    {
+        ensure_schema(&connection).unwrap();
+        crate::organization_payments::ensure_schema(&connection).unwrap();
+    }
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|_| "Platbu se nepodařilo odstranit.".to_string())?;

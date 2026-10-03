@@ -1,4 +1,4 @@
-use printpdf::{Mm, PdfDocument};
+use printpdf::{Color, Line, Mm, PdfDocument, Point, Rgb};
 use rusqlite::{params, Connection, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use std::{fs::File, io::BufWriter, path::Path};
@@ -282,20 +282,14 @@ pub fn create(
     }
     let mut connection = Connection::open(database_path)
         .map_err(|_| "Pojistnou událost se nepodařilo uložit.".to_string())?;
-    ensure_schema(&connection)
-        .map_err(|_| "Pojistnou událost se nepodařilo uložit.".to_string())?;
-    connection
-        .execute_batch(
-            r#"CREATE TABLE IF NOT EXISTS "AuditLog" (
-            "Id" INTEGER PRIMARY KEY AUTOINCREMENT,
-            "DatumČas" TEXT NOT NULL,
-            "Uživatel" TEXT NOT NULL,
-            "Operace" TEXT NOT NULL,
-            "IdentifikátorPojištěnce" TEXT,
-            "Výsledek" TEXT NOT NULL
-        );"#,
-        )
-        .map_err(|_| "Pojistnou událost se nepodařilo uložit.".to_string())?;
+    #[cfg(test)]
+    {
+        ensure_schema(&connection).unwrap();
+        connection.execute_batch(r#"CREATE TABLE IF NOT EXISTS "AuditLog" (
+            "Id" INTEGER PRIMARY KEY AUTOINCREMENT, "DatumČas" TEXT NOT NULL,
+            "Uživatel" TEXT NOT NULL, "Operace" TEXT NOT NULL,
+            "IdentifikátorPojištěnce" TEXT, "Výsledek" TEXT NOT NULL);"#).unwrap();
+    }
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|_| "Pojistnou událost se nepodařilo uložit.".to_string())?;
@@ -451,15 +445,31 @@ pub fn export_pdf(connection: &Connection, id: i64, destination: &Path) -> Resul
                 .map_err(|_| "Písmo není dostupné.".to_string())?,
         )
         .map_err(|_| "Písmo není dostupné.".to_string())?;
+    let bold_italic = document
+        .add_external_font(
+            File::open(r"C:\Windows\Fonts\arialbi.ttf")
+                .map_err(|_| "Písmo není dostupné.".to_string())?,
+        )
+        .map_err(|_| "Písmo není dostupné.".to_string())?;
     let current = document.get_page(page).get_layer(layer);
+    current.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.36, 0.72, None)));
     current.use_text(
-        "S dokumentem je nutno nakládat v souladu s pravidly ochrany osobních údajů.",
-        6.0,
-        Mm(20.0),
-        Mm(287.0),
-        &regular,
+        "S dokumentem je nutno nakládat ve smyslu zákona 101/2000 Sb., o ochraně osobních údajů a ve smyslu Nařízení EU č. 2016/679 o ochraně fyzických osob (tzv. GDPR) !",
+        5.5,
+        Mm(19.0),
+        Mm(289.0),
+        &bold_italic,
     );
-    current.use_text("POJISTNÁ UDÁLOST", 17.0, Mm(70.0), Mm(274.0), &bold);
+    current.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
+    current.use_text("POJISTNÁ UDÁLOST", 17.0, Mm(74.5), Mm(280.5), &bold);
+    current.set_outline_thickness(0.5);
+    current.add_line(Line {
+        points: vec![
+            (Point::new(Mm(74.5), Mm(278.8)), false),
+            (Point::new(Mm(132.0), Mm(278.8)), false),
+        ],
+        is_closed: false,
+    });
     let labels = [
         "Pojištěnec:",
         "Rodné číslo:",
@@ -474,29 +484,48 @@ pub fn export_pdf(connection: &Connection, id: i64, destination: &Path) -> Resul
         "Vznik PU:",
         "Oznámení PU:",
     ];
-    let mut y = 254.0;
+    let mut y = 264.0;
     for (label, value) in labels.iter().zip(values.iter()) {
-        current.use_text(*label, 10.0, Mm(22.0), Mm(y), &bold);
-        current.use_text(value, 10.0, Mm(66.0), Mm(y), &regular);
-        y -= 8.0;
+        current.use_text(*label, 9.5, Mm(18.0), Mm(y), &regular);
+        current.use_text(value, 9.5, Mm(46.5), Mm(y), &bold);
+        y -= 6.2;
     }
     for (label, index, lines) in [
         ("Popis PU:", 12_usize, 3_usize),
         ("Poznámky k PU:", 13, 2),
         ("Doplňky k PU:", 14, 2),
     ] {
-        current.use_text(label, 10.0, Mm(22.0), Mm(y), &bold);
+        current.use_text(label, 9.5, Mm(18.0), Mm(y), &bold);
+        current.set_outline_color(Color::Rgb(Rgb::new(0.72, 0.72, 0.72, None)));
+        current.set_outline_thickness(0.35);
+        let height = lines as f32 * 5.0 + 0.5;
+        let top = y + 2.2;
+        for (a, b) in [
+            ((46.5, top), (156.5, top)),
+            ((156.5, top), (156.5, top - height)),
+            ((156.5, top - height), (46.5, top - height)),
+            ((46.5, top - height), (46.5, top)),
+        ] {
+            current.add_line(Line {
+                points: vec![
+                    (Point::new(Mm(a.0), Mm(a.1)), false),
+                    (Point::new(Mm(b.0), Mm(b.1)), false),
+                ],
+                is_closed: false,
+            });
+        }
+        current.set_outline_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
         let chars: Vec<char> = values[index].replace(['\r', '\n'], " ").chars().collect();
         for (line, chunk) in chars.chunks(95).take(lines).enumerate() {
             current.use_text(
                 chunk.iter().collect::<String>(),
-                9.0,
-                Mm(66.0),
+                8.5,
+                Mm(46.8),
                 Mm(y - line as f32 * 5.0),
                 &regular,
             );
         }
-        y -= lines as f32 * 5.0 + 5.0;
+        y -= lines as f32 * 5.0 + 7.0;
     }
     for (label, index) in [
         ("Zjištěná škoda:", 15_usize),
@@ -504,9 +533,9 @@ pub fn export_pdf(connection: &Connection, id: i64, destination: &Path) -> Resul
         ("Pojistné plnění:", 17),
         ("Ukončeno:", 18),
     ] {
-        current.use_text(label, 10.0, Mm(22.0), Mm(y), &bold);
-        current.use_text(&values[index], 10.0, Mm(66.0), Mm(y), &regular);
-        y -= 8.0;
+        current.use_text(label, 9.5, Mm(18.0), Mm(y), &regular);
+        current.use_text(&values[index], 9.5, Mm(46.5), Mm(y), &regular);
+        y -= 6.2;
     }
     document
         .save(&mut BufWriter::new(File::create(destination).map_err(

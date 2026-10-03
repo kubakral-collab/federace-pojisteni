@@ -1,4 +1,7 @@
-use printpdf::{Mm, PdfDocument};
+use printpdf::{
+    path::{PaintMode, WindingOrder},
+    Color, Line, Mm, PdfDocument, Point, Polygon, Rgb,
+};
 use rusqlite::{
     params,
     types::{Value, ValueRef},
@@ -154,7 +157,6 @@ fn definition(kind: &str) -> Result<(&'static str, &'static str), String> {
 }
 
 pub fn preview(connection: &Connection, filter: &ReportFilter) -> Result<ReportPreview, String> {
-    ensure_schema(connection).map_err(|_| "Sestavu se nepodařilo připravit.".to_string())?;
     let (title, sql) = definition(&filter.kind)?;
     let oc = filter.organization_code.as_deref().unwrap_or_default();
     let org = filter.organization.as_deref().unwrap_or_default();
@@ -402,33 +404,58 @@ fn claims_pdf(report: &ReportPreview, destination: &Path) -> Result<(), String> 
                 .map_err(|_| "Písmo není dostupné.".to_string())?,
         )
         .map_err(|_| "Písmo není dostupné.".to_string())?;
+    let italic = document
+        .add_external_font(
+            File::open(r"C:\Windows\Fonts\ariali.ttf")
+                .map_err(|_| "Písmo není dostupné.".to_string())?,
+        )
+        .map_err(|_| "Písmo není dostupné.".to_string())?;
+    let bold_italic = document
+        .add_external_font(
+            File::open(r"C:\Windows\Fonts\arialbi.ttf")
+                .map_err(|_| "Písmo není dostupné.".to_string())?,
+        )
+        .map_err(|_| "Písmo není dostupné.".to_string())?;
     let mut page = first_page;
     let mut layer = first_layer;
     let mut y = 183.0;
     let mut page_number = 1;
     let draw_header = |page, layer, page_number: usize| {
         let current = document.get_page(page).get_layer(layer);
+        current.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.36, 0.72, None)));
         current.use_text(
-            "S dokumentem je nutno nakládat v souladu s pravidly ochrany osobních údajů.",
-            6.0,
+            "S dokumentem je nutno nakládat ve smyslu zákona 101/2000 Sb., o ochraně osobních údajů a ve smyslu Nařízení EU č. 2016/679 o ochraně fyzických osob (tzv. GDPR) !",
+            5.5,
             Mm(64.0),
             Mm(204.0),
-            &regular,
+            &bold_italic,
         );
+        current.set_fill_color(Color::Rgb(Rgb::new(0.72, 0.0, 0.0, None)));
         current.use_text(
             "SESTAVA POJISTNÝCH UDÁLOSTÍ",
-            17.0,
+            16.0,
             Mm(7.0),
             Mm(194.0),
-            &bold,
+            &bold_italic,
         );
+        current.set_outline_color(Color::Rgb(Rgb::new(0.72, 0.0, 0.0, None)));
+        current.set_outline_thickness(0.5);
+        current.add_line(Line {
+            points: vec![
+                (Point::new(Mm(7.0), Mm(192.8)), false),
+                (Point::new(Mm(92.0), Mm(192.8)), false),
+            ],
+            is_closed: false,
+        });
+        current.set_fill_color(Color::Rgb(Rgb::new(0.2, 0.2, 0.2, None)));
         current.use_text(
-            format!("Strana {page_number}"),
-            7.0,
-            Mm(270.0),
+            "Federace vlakových čet - presidium, Wilsonova 300/8, 110 00 Vinohrady (Praha 2)",
+            6.5,
+            Mm(100.0),
             Mm(7.0),
-            &regular,
+            &italic,
         );
+        let _ = page_number;
     };
     draw_header(page, layer, page_number);
     for row in &report.rows {
@@ -442,54 +469,63 @@ fn claims_pdf(report: &ReportPreview, destination: &Path) -> Result<(), String> 
         }
         let current = document.get_page(page).get_layer(layer);
         let at = |index: usize| row.get(index).map(String::as_str).unwrap_or("");
-        current.use_text(
-            format!("Poř.: {}   Pojištěnec: {}", at(0), clipped(at(1), 38)),
-            7.0,
-            Mm(7.0),
-            Mm(y),
-            &bold,
-        );
-        current.use_text(
-            format!(
-                "Evid: {}   Typ pojištění: {}   Období: {}",
-                at(2),
-                clipped(at(3), 28),
-                clipped(at(4), 24)
-            ),
-            7.0,
-            Mm(72.0),
-            Mm(y),
-            &regular,
-        );
-        current.use_text(
-            format!(
-                "PU: {}   Škoda: {}   Organizace: {}   Vypořádáno: {}",
-                at(5),
-                at(6),
-                clipped(at(7), 24),
-                at(8)
-            ),
-            7.0,
-            Mm(184.0),
-            Mm(y),
-            &regular,
-        );
-        y -= 5.0;
-        current.use_text("Popis události:", 7.0, Mm(7.0), Mm(y), &bold);
+        for (bottom, height, shade) in [(y - 0.5, 4.2, 0.92), (y - 4.7, 4.2, 0.92)] {
+            current.set_fill_color(Color::Rgb(Rgb::new(shade, shade, shade, None)));
+            current.add_polygon(Polygon {
+                rings: vec![vec![
+                    (Point::new(Mm(7.0), Mm(bottom)), false),
+                    (Point::new(Mm(290.0), Mm(bottom)), false),
+                    (Point::new(Mm(290.0), Mm(bottom + height)), false),
+                    (Point::new(Mm(7.0), Mm(bottom + height)), false),
+                ]],
+                mode: PaintMode::Fill,
+                winding_order: WindingOrder::NonZero,
+            });
+        }
+        let columns = [7.5, 14.0, 67.0, 78.0, 126.0, 171.0, 190.0, 221.0, 267.0];
+        let headers = ["Poř.:", "Pojištěnec:", "Evid:", "Typ pojištění", "Pojistné období", "PU ze dne", "Škoda", "Odborová organizace", "Vypořádáno"];
+        let cells = [at(0), at(1), at(2), at(3), at(4), at(5), at(6), at(7), at(8)];
+        current.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.85, None)));
+        for (x, header) in columns.iter().zip(headers.iter()) {
+            current.use_text(*header, 6.0, Mm(*x), Mm(y + 0.7), &bold);
+        }
+        current.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
+        for (index, (x, cell)) in columns.iter().zip(cells.iter()).enumerate() {
+            let shown = if index == 3 { clipped(cell, 27) } else if index == 7 { clipped(cell, 25) } else { clipped(cell, 20) };
+            current.use_text(shown, 6.2, Mm(*x), Mm(y - 3.6), if index < 2 { &bold } else { &regular });
+        }
+        if !at(8).trim().is_empty() {
+            current.set_fill_color(Color::Rgb(Rgb::new(1.0, 0.0, 0.0, None)));
+            current.use_text(at(8), 6.2, Mm(columns[8]), Mm(y - 3.6), &bold);
+        }
+        y -= 9.0;
+        current.set_fill_color(Color::Rgb(Rgb::new(0.12, 0.12, 0.12, None)));
+        current.use_text("Popis události:", 6.5, Mm(7.0), Mm(y), &bold_italic);
+        current.add_line(Line {
+            points: vec![(Point::new(Mm(7.0), Mm(y - 0.6)), false), (Point::new(Mm(29.0), Mm(y - 0.6)), false)],
+            is_closed: false,
+        });
         y -= 4.0;
         let description = at(9).replace(['\r', '\n'], " ");
         let characters: Vec<char> = description.chars().collect();
         for chunk in characters.chunks(180).take(3) {
+            current.set_fill_color(Color::Rgb(Rgb::new(0.58, 0.58, 0.58, None)));
             current.use_text(
                 chunk.iter().collect::<String>(),
-                7.0,
+                6.8,
                 Mm(7.0),
                 Mm(y),
-                &regular,
+                &italic,
             );
             y -= 4.0;
         }
-        y -= 4.0;
+        current.set_outline_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
+        current.set_outline_thickness(0.5);
+        current.add_line(Line {
+            points: vec![(Point::new(Mm(7.0), Mm(y - 1.0)), false), (Point::new(Mm(290.0), Mm(y - 1.0)), false)],
+            is_closed: false,
+        });
+        y -= 6.0;
     }
     document
         .save(&mut BufWriter::new(
