@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 import "./App.css";
 import { SETTINGS_MODULES } from "./modules/settings";
+import { FONT_SCALE_OPTIONS, readFontScale, saveFontScale, type FontScale } from "./ui/fontScale";
 
 const UPDATE_CHECK_ENABLED_KEY = "pojisteni.updateCheckEnabled";
 const LAST_UPDATE_CHECK_KEY = "pojisteni.lastUpdateCheck";
@@ -153,6 +154,8 @@ type ApplicationForm = { firstName:string; lastName:string; personalId:string; a
 type OrganizationCodeOption = { organization:string; code?:string };
 type ApplicationOptions = { organizations:OrganizationCodeOption[]; annualAmounts:number[] };
 type ApplicationResult = { applicationId:number; identifier:number; registrationNumber:number; applicationDate:string; insuranceFrom:string; premium:number; pdfPath:string };
+type RegistrationNumberOptions = { nextNumber:number; freeNumbers:number[] };
+type RegistrationNumberMode = "next"|"free";
 
 type LegacyTablePage = {
   source: string;
@@ -472,7 +475,7 @@ function emptyTariffRate(): TariffRateInput {
   };
 }
 
-function emptyApplication(): ApplicationForm { return { firstName:"",lastName:"",personalId:"",address:"",city:"",postalCode:"",email:"",category:"B",loss:false,annualAmount:200_000,affiliation:"FVČ",organization:"",code:"" }; }
+function emptyApplication(): ApplicationForm { return { firstName:"",lastName:"",personalId:"",address:"",city:"",postalCode:"",email:"",category:"B",loss:false,annualAmount:0,affiliation:"FVČ",organization:"",code:"" }; }
 
 function optional(value: string): string | null {
   const trimmed = value.trim();
@@ -783,6 +786,7 @@ function Shell({ active, user, onNavigate, onLogout, updater, backupBusy, onCrea
     icon: React.ReactNode;
   }> = [
     { screen: "Přehled", label: "Hlavní panel", icon: <LayoutDashboard /> },
+    { screen: "Pojištěnci", label: "Nový pojištěnec", icon: <UserPlus /> },
     { screen: "Seznam", label: "Seznam pojištěnců", icon: <Users /> },
     { screen: "Přidat platbu", label: "Přidat platbu", icon: <CreditCard /> },
     { screen: "Doklady o zaplacení", label: "Doklady o zaplacení", icon: <FileText /> },
@@ -796,7 +800,6 @@ function Shell({ active, user, onNavigate, onLogout, updater, backupBusy, onCrea
     { screen: "Archiv", label: "Archiv", icon: <Archive /> },
     { screen: "Historická data", label: "Historická data", icon: <Database /> },
     { screen: "Nastavení", label: "Nastavení", icon: <Settings /> },
-    { screen: "Pojištěnci", label: "Nový pojištěnec", icon: <UserPlus /> },
     { screen: "Správa záloh", label: "Správa záloh", icon: <FolderArchive /> },
     { screen: "O programu", label: "O programu", icon: <Info /> },
   ];
@@ -872,6 +875,15 @@ function Shell({ active, user, onNavigate, onLogout, updater, backupBusy, onCrea
   );
 }
 
+function RegistrationNumberPicker({options,mode,value,onChange}:{options:RegistrationNumberOptions;mode:RegistrationNumberMode;value:number;onChange:(mode:RegistrationNumberMode,value:number)=>void}) {
+  const freeAvailable=options.freeNumbers.length>0;
+  return <fieldset className="registration-number-picker"><legend>Evidenční číslo</legend>
+    <label><input type="radio" name="registration-number-mode" checked={mode==="next"} onChange={()=>onChange("next",options.nextNumber)}/><span><strong>Další číslo v řadě</strong><small>{options.nextNumber||"—"}</small></span></label>
+    <label className={!freeAvailable?"disabled":""}><input type="radio" name="registration-number-mode" checked={mode==="free"} disabled={!freeAvailable} onChange={()=>onChange("free",options.freeNumbers[0]??0)}/><span><strong>Použít volné evidenční číslo</strong>{!freeAvailable&&<small>Momentálně nejsou k dispozici žádná volná evidenční čísla.</small>}</span></label>
+    {mode==="free"&&freeAvailable&&<label className="registration-number-select">Volné číslo<select value={value} onChange={event=>onChange("free",Number(event.target.value))}>{options.freeNumbers.map(number=><option key={number} value={number}>{number}</option>)}</select></label>}
+  </fieldset>;
+}
+
 export default function App() {
   const [screen, setScreen] = useState<Screen>(initialScreen);
   const [password, setPassword] = useState("");
@@ -881,7 +893,10 @@ export default function App() {
   const [role, setRole] = useState(preview ? "Správce" : "");
   const [form, setForm] = useState<InsuredForm>(() => emptyForm(0));
   const [applicationForm,setApplicationForm]=useState<ApplicationForm>(emptyApplication);
-  const [applicationOptions,setApplicationOptions]=useState<ApplicationOptions>({organizations:[],annualAmounts:[200_000,240_000,280_000,320_000,360_000,400_000]});
+  const [applicationOptions,setApplicationOptions]=useState<ApplicationOptions>({organizations:[],annualAmounts:[]});
+  const [registrationOptions,setRegistrationOptions]=useState<RegistrationNumberOptions>({nextNumber:0,freeNumbers:[]});
+  const [registrationMode,setRegistrationMode]=useState<RegistrationNumberMode>("next");
+  const [registrationNumber,setRegistrationNumber]=useState(0);
   const [startupStatus,setStartupStatus]=useState<StartupStatus|null>(preview ? {ready:true,applicationVersion:"preview",databaseSchemaVersion:1,supportedSchemaVersion:1,smokeMode:false}:null);
   const [applicationStep,setApplicationStep]=useState<1|2|3>(1);
   const [applicationTariff,setApplicationTariff]=useState<TariffResult>({premium:0,months:12,insuredAmount:0});
@@ -936,6 +951,7 @@ export default function App() {
   const [legacyPage, setLegacyPage] = useState<LegacyTablePage | null>(null);
   const [legacyLoading, setLegacyLoading] = useState(false);
   const [settingsSection, setSettingsSection] = useState<string | null>(null);
+  const [fontScale, setFontScale] = useState<FontScale>(readFontScale);
   const [updateCheckEnabled, setUpdateCheckEnabled] = useState(
     () => localStorage.getItem(UPDATE_CHECK_ENABLED_KEY) !== "false",
   );
@@ -966,6 +982,7 @@ export default function App() {
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [receiptSearch, setReceiptSearch] = useState("");
   const [batchCertificateFilter, setBatchCertificateFilter] = useState<BatchCertificateFilter>({ paidFrom: "", organizationCode: "", organization: "" });
+  const [batchCertificateOrganizations, setBatchCertificateOrganizations] = useState<string[]>([]);
   const [batchCertificateResult, setBatchCertificateResult] = useState<BatchCertificateResult | null>(null);
   const [batchCertificateBusy, setBatchCertificateBusy] = useState(false);
   const [memberReceipts, setMemberReceipts] = useState<Receipt[]>([]);
@@ -1205,7 +1222,12 @@ export default function App() {
 
   useEffect(() => {
     if (screen === "Správa záloh" && !preview) void loadDatabaseBackups();
-    if (screen === "Doklady o zaplacení" && !preview) void loadReceipts(undefined, "");
+    if (screen === "Doklady o zaplacení" && !preview) {
+      void loadReceipts(undefined, "");
+      void invoke<string[]>("list_certificate_organizations")
+        .then(setBatchCertificateOrganizations)
+        .catch((message) => setError(String(message)));
+    }
     if (screen === "Pojistné události" && !preview) void loadClaimsOverview();
     if (screen === "Sestavy a exporty" && !preview) void loadLegacyReportHistory();
   }, [screen]);
@@ -1254,17 +1276,24 @@ export default function App() {
 
   useEffect(()=>{
     if(screen!=="Vyplnit přihlášku")return;
+    if(preview)return;
     invoke<ApplicationOptions>("get_application_options",{affiliation:applicationForm.affiliation}).then(result=>{
       setApplicationOptions(result);
-      setApplicationForm(current=>result.organizations.some(item=>item.organization===current.organization)?current:{...current,organization:"",code:""});
+      setApplicationForm(current=>({
+        ...current,
+        ...(!result.organizations.some(item=>item.organization===current.organization)?{organization:"",code:""}:{}),
+        ...(!result.annualAmounts.includes(current.annualAmount)?{annualAmount:0}:{}),
+      }));
     }).catch(message=>setError(String(message)));
   },[screen,applicationForm.affiliation]);
 
   useEffect(()=>{
     if(screen!=="Vyplnit přihlášku")return;
+    if(preview)return;
+    if(!applicationOptions.annualAmounts.includes(applicationForm.annualAmount)){setApplicationTariff({premium:0,months:0,insuredAmount:0});return;}
     const now=new Date(); const next=new Date(now.getFullYear(),now.getMonth()+1,1); const start=`${next.getFullYear()}-${String(next.getMonth()+1).padStart(2,"0")}-01`; const end=`${next.getFullYear()}-12-31`;
     invoke<TariffResult>("calculate_tariff",{category:applicationForm.category,loss:applicationForm.loss,annualAmount:applicationForm.annualAmount,insuranceFrom:start,insuranceTo:end}).then(setApplicationTariff).catch(message=>setError(String(message)));
-  },[screen,applicationForm.category,applicationForm.loss,applicationForm.annualAmount]);
+  },[screen,applicationForm.category,applicationForm.loss,applicationForm.annualAmount,applicationOptions.annualAmounts]);
 
   useEffect(() => {
     if (screen !== "Přehled" && screen !== "O programu") return;
@@ -1274,7 +1303,6 @@ export default function App() {
       .catch((message) => setError(String(message)));
   }, [screen]);
 
-  const registrationNumber = options.lastRegistrationNumber + 1;
   function update<K extends keyof InsuredForm>(key: K, value: InsuredForm[K]) {
     setForm((current) => ({ ...current, [key]: value }));
   }
@@ -1593,8 +1621,8 @@ export default function App() {
     setBatchCertificateBusy(true);
     setError("");
     try {
-      const directory = await invoke<string | null>("export_certificate_batch", { receiptIds: batchCertificateResult.receiptIds });
-      if (directory) setNotice(`Pojistná potvrzení byla uložena do ${directory}.`);
+      const file = await invoke<string | null>("export_certificate_batch", { receiptIds: batchCertificateResult.receiptIds });
+      if (file) setNotice(`Hromadné potvrzení bylo uloženo do ${file}.`);
     } catch (message) {
       setError(String(message));
     } finally {
@@ -1853,7 +1881,12 @@ export default function App() {
     }
   }
 
-  function openInsured() {
+  async function prepareRegistrationNumber() {
+    const result=await invoke<RegistrationNumberOptions>("get_registration_number_options");
+    setRegistrationOptions(result);setRegistrationMode("next");setRegistrationNumber(result.nextNumber);
+  }
+
+  async function openInsured() {
     setError("");
     setNotice("");
     const activeYear = dashboard?.activeInsuranceYear;
@@ -1861,13 +1894,13 @@ export default function App() {
       setError("Aktivní pojistný rok se nepodařilo načíst.");
       return;
     }
-    setForm(emptyForm(activeYear));
-    setScreen("Nový člen");
+    try{await prepareRegistrationNumber();setForm(emptyForm(activeYear));setScreen("Nový člen");}catch(message){setError(String(message));}
   }
 
-  async function printBlankApplication(){setSaving(true);setError("");try{const path=await invoke<string|null>("export_blank_application");if(path){setNotice(`Prázdná přihláška byla vytvořena: ${path}`);await invoke("open_generated_pdf",{path,folder:false});}}catch(message){setError(String(message));}finally{setSaving(false)}}
-  function openApplication(){setApplicationForm(emptyApplication());setApplicationStep(1);setApplicationResult(null);setError("");setNotice("");setScreen("Vyplnit přihlášku")}
-  async function completeApplication(){setSaving(true);setError("");try{const result=await invoke<ApplicationResult>("complete_application",{application:{...applicationForm,email:optional(applicationForm.email)}});setApplicationResult(result);setNotice(`Člen byl založen s evidenčním číslem ${result.registrationNumber}.`);await invoke("open_generated_pdf",{path:result.pdfPath,folder:false});}catch(message){setError(String(message));}finally{setSaving(false)}}
+  async function printBlankApplication(){setSaving(true);setError("");try{const path=await invoke<string>("create_blank_application_for_printing");await invoke("print_generated_pdf",{path,deleteAfterPrint:true});setNotice("Prázdná přihláška byla předána systémovému tisku.");}catch(message){setError(String(message));}finally{setSaving(false)}}
+  async function printCompletedApplication(path:string){setSaving(true);setError("");try{await invoke("print_generated_pdf",{path,deleteAfterPrint:false});setNotice("Přihláška byla předána systémovému tisku.");}catch(message){setError(String(message));}finally{setSaving(false)}}
+  async function openApplication(){setError("");setNotice("");try{await prepareRegistrationNumber();setApplicationForm(emptyApplication());setApplicationStep(1);setApplicationResult(null);setScreen("Vyplnit přihlášku");}catch(message){setError(String(message));}}
+  async function completeApplication(){setSaving(true);setError("");try{const result=await invoke<ApplicationResult>("complete_application",{application:{...applicationForm,email:optional(applicationForm.email),registrationNumber}});setApplicationResult(result);setNotice(`Člen byl založen s evidenčním číslem ${result.registrationNumber}.`);await invoke("open_generated_pdf",{path:result.pdfPath,folder:false});}catch(message){setError(String(message));if(String(message).startsWith("Evidenční číslo "))await prepareRegistrationNumber();}finally{setSaving(false)}}
   async function saveApplicationSnapshot(applicationId:number){setSaving(true);setError("");try{const path=await invoke<string|null>("export_application_snapshot",{id:applicationId});if(path)setNotice(`Neměnná přihláška byla uložena: ${path}`);}catch(message){setError(String(message));}finally{setSaving(false)}}
 
   async function loadMembers(page = 1, search = activeSearch, filters = memberFilters) {
@@ -2148,6 +2181,7 @@ export default function App() {
             insuranceTo: optional(form.insuranceTo),
             actualPayment: form.actualPayment === "" ? null : Number(form.actualPayment),
             email: optional(form.email),
+            registrationNumber,
           },
         },
       );
@@ -2166,10 +2200,12 @@ export default function App() {
           year: activeYear,
         });
         setOptions(refreshed);
+        await prepareRegistrationNumber();
         titleRef.current?.focus();
       }
     } catch (message) {
       setError(String(message));
+      if(String(message).startsWith("Evidenční číslo ")) await prepareRegistrationNumber();
     } finally {
       setSaving(false);
     }
@@ -2574,6 +2610,42 @@ export default function App() {
   }
 
   if (screen === "Nastavení") {
+    if (settingsSection === "font-size") {
+      return (
+        <Shell {...shellUpdater} active="Nastavení" user={user} onNavigate={navigate} onLogout={leaveToLogin}>
+          <div className="page font-size-settings-page">
+            <header className="page-header">
+              <div><small>Nastavení</small><h1>Velikost písma</h1></div>
+              <button onClick={() => setSettingsSection(null)}><ArrowLeft /> Zpět na nastavení</button>
+            </header>
+            <section className="font-size-settings-card">
+              <fieldset>
+                <legend>Velikost písma v aplikaci</legend>
+                <p>Změna se projeví okamžitě v celé aplikaci a zůstane zachována i po restartu.</p>
+                <div className="font-size-options">
+                  {FONT_SCALE_OPTIONS.map((option) => (
+                    <label key={option.value}>
+                      <input
+                        type="radio"
+                        name="font-scale"
+                        value={option.value}
+                        checked={fontScale === option.value}
+                        onChange={() => { setFontScale(option.value); saveFontScale(option.value); }}
+                      />
+                      <span>{option.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              <div className="font-size-preview" aria-live="polite">
+                <strong>Ukázka textu</strong>
+                <span>Seznam pojištěnců – Jan Novák – evidenční číslo 1345</span>
+              </div>
+            </section>
+          </div>
+        </Shell>
+      );
+    }
     if (settingsSection === "updates") {
       return (
         <Shell {...shellUpdater} active="Nastavení" user={user} onNavigate={navigate} onLogout={leaveToLogin}>
@@ -2757,7 +2829,7 @@ export default function App() {
               <article
                 key={module.id}
                 className={module.enabled ? "enabled" : ""}
-                onClick={module.id === "tariffs" ? openTariffSettings : module.id === "payments" ? openPaymentSettings : module.id === "email" ? openEmailSettings : module.id === "receipts" ? openReceiptSettings : module.id === "updates" ? () => setSettingsSection("updates") : module.id === "backups" ? () => navigate("Správa záloh") : undefined}
+                onClick={module.id === "font-size" ? () => setSettingsSection("font-size") : module.id === "tariffs" ? openTariffSettings : module.id === "payments" ? openPaymentSettings : module.id === "email" ? openEmailSettings : module.id === "receipts" ? openReceiptSettings : module.id === "updates" ? () => setSettingsSection("updates") : module.id === "backups" ? () => navigate("Správa záloh") : undefined}
               >
                 {module.id === "payments" ? <CreditCard /> : <Settings />}<strong>{module.label}</strong>
                 <small>{module.enabled ? "Otevřít nastavení" : "Připravujeme"}</small>
@@ -3047,17 +3119,17 @@ export default function App() {
           </section>
           <section className="agenda-workspace">
             <header className="member-payments-header">
-              <div><small>Pojistná potvrzení</small><h2>Dávkové vytvoření a export</h2></div>
+              <div><small>Pojistná potvrzení</small><h2>Hromadné potvrzení a export</h2></div>
             </header>
             <p>Vybere plně uhrazené aktivní členy aktuálního pojistného roku. Filtry lze kombinovat; prázdná hodnota znamená všechny.</p>
             <div className="payment-settings-form">
               <label>Úhrada od data<input type="date" value={batchCertificateFilter.paidFrom} onChange={(event) => setBatchCertificateFilter({ ...batchCertificateFilter, paidFrom: event.target.value })} /></label>
               <label>Kód OC<select value={batchCertificateFilter.organizationCode} onChange={(event) => setBatchCertificateFilter({ ...batchCertificateFilter, organizationCode: event.target.value })}><option value="">Všechny</option><option value="1">OC 1</option><option value="2">OC 2</option></select></label>
-              <label>Základní organizace<input value={batchCertificateFilter.organization} onChange={(event) => setBatchCertificateFilter({ ...batchCertificateFilter, organization: event.target.value })} placeholder="Přesný název ZO" /></label>
+              <label>Základní organizace<select value={batchCertificateFilter.organization} onChange={(event) => setBatchCertificateFilter({ ...batchCertificateFilter, organization: event.target.value })}><option value="">Všechny</option>{batchCertificateOrganizations.map((organization) => <option key={organization} value={organization}>{organization}</option>)}</select></label>
             </div>
             <div className="form-actions">
-              <button className="primary" disabled={batchCertificateBusy} onClick={() => void createCertificateBatch()}><Plus /> Vytvořit dávku</button>
-              <button disabled={batchCertificateBusy || !batchCertificateResult?.receiptIds.length} onClick={() => void exportCertificateBatch()}><Upload /> Exportovat dávku PDF</button>
+              <button className="primary" disabled={batchCertificateBusy} onClick={() => void createCertificateBatch()}><Plus /> Vytvořit hromadné potvrzení</button>
+              <button disabled={batchCertificateBusy || !batchCertificateResult?.receiptIds.length} onClick={() => void exportCertificateBatch()}><Upload /> Exportovat jedno PDF</button>
             </div>
             {batchCertificateResult && <div className="payment-summary-cards">
               <div><span>Vybráno</span><strong>{batchCertificateResult.selected}</strong></div>
@@ -3102,10 +3174,38 @@ export default function App() {
     const variant=applicationForm.category==="B"?"Standard":applicationForm.category==="A"?"Řidič":"Strojvedoucí";
     return <Shell {...shellUpdater} active="Pojištěnci" user={user} onNavigate={navigate} onLogout={leaveToLogin}><main className="page application-page"><header><button className="back-link" onClick={()=>setScreen("Pojištěnci")}><ArrowLeft/> Zpět</button><small>Nový pojištěnec</small><h1>Vyplnit přihlášku</h1><div className="application-steps"><span className={applicationStep===1?"active":""}>1 Osobní údaje a pojištění</span><span className={applicationStep===2?"active":""}>2 Zařazení pojištěnce</span><span className={applicationStep===3?"active":""}>3 Rekapitulace</span></div></header>
       {error&&<div className="message error">{error}</div>}{notice&&<div className="message success">{notice}</div>}
-      {applicationResult?<section className="application-summary"><h2>Přihláška je dokončena</h2><p>Člen i neměnný PDF snapshot byly uloženy společně.</p><dl><div><dt>Evidenční číslo</dt><dd>{applicationResult.registrationNumber}</dd></div><div><dt>Datum přihlášky</dt><dd>{displayDate(applicationResult.applicationDate)}</dd></div><div><dt>Pojištění od</dt><dd>{displayDate(applicationResult.insuranceFrom)}</dd></div></dl><div className="form-actions"><button className="primary" onClick={()=>void invoke("open_generated_pdf",{path:applicationResult.pdfPath,folder:false})}><FileText/> Otevřít PDF</button><button disabled={saving} onClick={()=>void saveApplicationSnapshot(applicationResult.applicationId)}><Save/> Uložit PDF</button><button onClick={()=>setScreen("Pojištěnci")}>Hotovo</button></div></section>:
-      applicationStep===1?<section className="application-form"><h2>Osobní údaje</h2><div className="application-grid"><label>Jméno *<input value={applicationForm.firstName} onChange={e=>setApplicationForm({...applicationForm,firstName:e.target.value})}/></label><label>Příjmení *<input value={applicationForm.lastName} onChange={e=>setApplicationForm({...applicationForm,lastName:e.target.value})}/></label><label>Rodné číslo *<input placeholder="000000/0000" value={applicationForm.personalId} onChange={e=>setApplicationForm({...applicationForm,personalId:formatPersonalId(e.target.value)})}/></label><label>Bydliště *<input value={applicationForm.address} onChange={e=>setApplicationForm({...applicationForm,address:e.target.value})}/></label><label>Město *<input value={applicationForm.city} onChange={e=>setApplicationForm({...applicationForm,city:e.target.value})}/></label><label>PSČ *<input value={applicationForm.postalCode} onChange={e=>setApplicationForm({...applicationForm,postalCode:formatPostalCode(e.target.value)})}/></label><label>E-mail<input type="email" value={applicationForm.email} onChange={e=>setApplicationForm({...applicationForm,email:e.target.value})}/></label></div><h2>Výběr pojištění</h2><div className="choice-grid">{([['B',false,'Standard'],['B',true,'Standard + ztráta'],['A',false,'Řidič'],['A',true,'Řidič + ztráta'],['C',false,'Strojvedoucí'],['C',true,'Strojvedoucí + ztráta']] as const).map(([category,loss,label])=><label className="choice-card" key={label}><input type="radio" name="variant" checked={applicationForm.category===category&&applicationForm.loss===loss} onChange={()=>setApplicationForm({...applicationForm,category,loss})}/><span>{label}</span></label>)}</div><h2>Roční limit</h2><div className="choice-grid limits">{applicationOptions.annualAmounts.map(amount=><label className="choice-card" key={amount}><input type="radio" name="limit" checked={applicationForm.annualAmount===amount} onChange={()=>setApplicationForm({...applicationForm,annualAmount:amount})}/><span>{displayCurrency(amount)}</span></label>)}</div><div className="application-price"><span>Aktuální roční sazba</span><strong>{displayCurrency(applicationTariff.premium)}</strong><small>Pro období od {nextStart} bude předepsáno {displayCurrency(applicationTariff.insuredAmount)}.</small></div><footer className="form-actions"><button className="primary" onClick={()=>{setError("");if(!applicationForm.firstName||!applicationForm.lastName||!applicationForm.personalId||!applicationForm.address||!applicationForm.city||!applicationForm.postalCode){setError("Doplňte všechna povinná osobní pole.");return}setApplicationStep(2)}}>Pokračovat</button></footer></section>:
-      applicationStep===2?<section className="application-form"><h2>Zařazení nového pojištěnce</h2><p className="muted">Tyto interní údaje se na přihlášku netisknou.</p><div className="application-grid"><label>Odborná příslušnost *<select value={applicationForm.affiliation} onChange={e=>setApplicationForm({...applicationForm,affiliation:e.target.value as "FVČ"|"FV",organization:"",code:""})}><option>FVČ</option><option>FV</option></select></label><label>Organizace / ZO *<select value={applicationForm.organization} onChange={e=>{const item=applicationOptions.organizations.find(x=>x.organization===e.target.value);setApplicationForm({...applicationForm,organization:e.target.value,code:item?.code??""})}}><option value=""/>{applicationOptions.organizations.map(item=><option key={item.organization}>{item.organization}</option>)}</select></label><label>KódOC *<input value={applicationForm.code} onChange={e=>setApplicationForm({...applicationForm,code:e.target.value})}/><small>{selectedOrganization?.code?"Jednoznačně předvyplněno z existujících dat.":"Vazba není jednoznačná; zadejte podle současných dat."}</small></label></div><footer className="form-actions"><button onClick={()=>setApplicationStep(1)}>Zpět</button><button className="primary" onClick={()=>{if(!applicationForm.organization||!applicationForm.code){setError("Doplňte organizaci a KódOC.");return}setError("");setApplicationStep(3)}}>Rekapitulace</button></footer></section>:
-      <section className="application-summary"><h2>Rekapitulace</h2><dl><div><dt>Pojištěnec</dt><dd>{applicationForm.firstName} {applicationForm.lastName}</dd></div><div><dt>Rodné číslo</dt><dd>{applicationForm.personalId}</dd></div><div><dt>Adresa</dt><dd>{applicationForm.address}, {applicationForm.postalCode} {applicationForm.city}</dd></div><div><dt>Pojištění</dt><dd>{variant}{applicationForm.loss?" + ztráta":""}</dd></div><div><dt>Roční limit</dt><dd>{displayCurrency(applicationForm.annualAmount)}</dd></div><div><dt>Aktuální roční sazba</dt><dd>{displayCurrency(applicationTariff.premium)}</dd></div><div><dt>Pojištění od</dt><dd>{nextStart}</dd></div><div><dt>Interní zařazení</dt><dd>{applicationForm.affiliation} / {applicationForm.organization} / KódOC {applicationForm.code}</dd></div></dl><p className="muted">Interní zařazení nebude vytištěno. Podpis se doplní ručně na vytištěnou přihlášku.</p><footer className="form-actions"><button onClick={()=>setApplicationStep(2)}>Zpět</button><button className="primary" disabled={saving} onClick={()=>void completeApplication()}><Check/> Dokončit přihlášku</button></footer></section>}
+      {applicationResult?<section className="application-summary"><h2>Přihláška je dokončena</h2><p>Člen i neměnný PDF snapshot byly uloženy společně.</p><dl><div><dt>Evidenční číslo</dt><dd>{applicationResult.registrationNumber}</dd></div><div><dt>Datum přihlášky</dt><dd>{displayDate(applicationResult.applicationDate)}</dd></div><div><dt>Pojištění od</dt><dd>{displayDate(applicationResult.insuranceFrom)}</dd></div></dl><div className="form-actions"><button className="primary" disabled={saving} onClick={()=>void printCompletedApplication(applicationResult.pdfPath)}><Printer/> Tisk</button><button onClick={()=>void invoke("open_generated_pdf",{path:applicationResult.pdfPath,folder:false})}><FileText/> Otevřít PDF</button><button disabled={saving} onClick={()=>void saveApplicationSnapshot(applicationResult.applicationId)}><Save/> Uložit PDF</button><button onClick={()=>setScreen("Pojištěnci")}>Hotovo</button></div></section>:
+      applicationStep===1?<section className="application-form application-form-redesign">
+        <section className="application-section" aria-labelledby="application-personal-title">
+          <header className="application-section-heading"><div><small>Krok 1</small><h2 id="application-personal-title">Osobní údaje</h2></div><span>Povinná pole jsou označena *</span></header>
+          <div className="application-grid personal-grid">
+            <label>Jméno *<input autoComplete="given-name" value={applicationForm.firstName} onChange={e=>setApplicationForm({...applicationForm,firstName:e.target.value})}/></label>
+            <label>Příjmení *<input autoComplete="family-name" value={applicationForm.lastName} onChange={e=>setApplicationForm({...applicationForm,lastName:e.target.value})}/></label>
+            <label>Rodné číslo *<input placeholder="000000/0000" value={applicationForm.personalId} onChange={e=>setApplicationForm({...applicationForm,personalId:formatPersonalId(e.target.value)})}/></label>
+            <label>Bydliště *<input autoComplete="street-address" value={applicationForm.address} onChange={e=>setApplicationForm({...applicationForm,address:e.target.value})}/></label>
+            <label>Město *<input autoComplete="address-level2" value={applicationForm.city} onChange={e=>setApplicationForm({...applicationForm,city:e.target.value})}/></label>
+            <label>PSČ *<input autoComplete="postal-code" value={applicationForm.postalCode} onChange={e=>setApplicationForm({...applicationForm,postalCode:formatPostalCode(e.target.value)})}/></label>
+            <label className="application-field-wide">E-mail <small>nepovinné</small><input autoComplete="email" type="email" value={applicationForm.email} onChange={e=>setApplicationForm({...applicationForm,email:e.target.value})}/></label>
+          </div>
+        </section>
+        <fieldset className="application-section application-choice-section">
+          <legend>Výběr pojištění</legend>
+          <p>Vyberte variantu podle pracovní pozice a rozsahu krytí.</p>
+          <div className="choice-grid insurance-choices">{([['B',false,'Standard'],['B',true,'Standard + ztráta'],['A',false,'Řidič'],['A',true,'Řidič + ztráta'],['C',false,'Strojvedoucí'],['C',true,'Strojvedoucí + ztráta']] as const).map(([category,loss,label])=><label className="choice-card" key={label}><input type="radio" name="variant" checked={applicationForm.category===category&&applicationForm.loss===loss} onChange={()=>setApplicationForm({...applicationForm,category,loss})}/><span>{label}</span></label>)}</div>
+        </fieldset>
+        <fieldset className="application-section application-choice-section">
+          <legend>Roční limit</legend>
+          <p>Zvolte maximální výši pojistného krytí.</p>
+          <div className="choice-grid limits">{applicationOptions.annualAmounts.map(amount=><label className="choice-card" key={amount}><input type="radio" name="limit" checked={applicationForm.annualAmount===amount} onChange={()=>setApplicationForm({...applicationForm,annualAmount:amount})}/><span>{displayCurrency(amount)}</span></label>)}</div>
+          <div className="application-price" aria-live="polite">
+            <div><span>Aktuální roční sazba</span><strong>{displayCurrency(applicationTariff.premium)}</strong></div>
+            <div><span>Počátek období</span><strong>{nextStart}</strong><small>Od {nextStart} bude předepsáno {displayCurrency(applicationTariff.insuredAmount)}.</small></div>
+          </div>
+        </fieldset>
+        <footer className="application-navigation"><button type="button" onClick={()=>setScreen("Pojištěnci")}><ArrowLeft/> Zpět</button><button type="button" className="primary" onClick={()=>{setError("");if(!applicationForm.firstName||!applicationForm.lastName||!applicationForm.personalId||!applicationForm.address||!applicationForm.city||!applicationForm.postalCode){setError("Doplňte všechna povinná osobní pole.");return}if(!applicationOptions.annualAmounts.includes(applicationForm.annualAmount)){setError("Vyberte právě jeden roční limit.");return}setApplicationStep(2)}}>Pokračovat <ChevronRight/></button></footer>
+      </section>:
+      applicationStep===2?<section className="application-form"><h2>Zařazení nového pojištěnce</h2><p className="muted">Tyto interní údaje se na přihlášku netisknou.</p><div className="application-grid"><label>Odborná příslušnost *<select value={applicationForm.affiliation} onChange={e=>setApplicationForm({...applicationForm,affiliation:e.target.value as "FVČ"|"FV",organization:"",code:""})}><option>FVČ</option><option>FV</option></select></label><label>Organizace / ZO *<select value={applicationForm.organization} onChange={e=>{const item=applicationOptions.organizations.find(x=>x.organization===e.target.value);setApplicationForm({...applicationForm,organization:e.target.value,code:item?.code??""})}}><option value=""/>{applicationOptions.organizations.map(item=><option key={item.organization}>{item.organization}</option>)}</select></label><label>KódOC *<input value={applicationForm.code} onChange={e=>setApplicationForm({...applicationForm,code:e.target.value})}/><small>{selectedOrganization?.code?"Jednoznačně předvyplněno z existujících dat.":"Vazba není jednoznačná; zadejte podle současných dat."}</small></label><div className="wide"><RegistrationNumberPicker options={registrationOptions} mode={registrationMode} value={registrationNumber} onChange={(mode,value)=>{setRegistrationMode(mode);setRegistrationNumber(value)}}/></div></div><footer className="form-actions"><button onClick={()=>setApplicationStep(1)}>Zpět</button><button className="primary" onClick={()=>{if(!applicationForm.organization||!applicationForm.code){setError("Doplňte organizaci a KódOC.");return}setError("");setApplicationStep(3)}}>Rekapitulace</button></footer></section>:
+      <section className="application-summary"><h2>Rekapitulace</h2><dl><div><dt>Pojištěnec</dt><dd>{applicationForm.firstName} {applicationForm.lastName}</dd></div><div><dt>Rodné číslo</dt><dd>{applicationForm.personalId}</dd></div><div><dt>Adresa</dt><dd>{applicationForm.address}, {applicationForm.postalCode} {applicationForm.city}</dd></div><div><dt>Pojištění</dt><dd>{variant}{applicationForm.loss?" + ztráta":""}</dd></div><div><dt>Roční limit</dt><dd>{displayCurrency(applicationForm.annualAmount)}</dd></div><div><dt>Aktuální roční sazba</dt><dd>{displayCurrency(applicationTariff.premium)}</dd></div><div><dt>Pojištění od</dt><dd>{nextStart}</dd></div><div><dt>Evidenční číslo</dt><dd>{registrationNumber}</dd></div><div><dt>Interní zařazení</dt><dd>{applicationForm.affiliation} / {applicationForm.organization} / KódOC {applicationForm.code}</dd></div></dl><p className="muted">Interní zařazení nebude vytištěno. Podpis se doplní ručně na vytištěnou přihlášku.</p><footer className="form-actions"><button onClick={()=>setApplicationStep(2)}>Zpět</button><button className="primary" disabled={saving} onClick={()=>void completeApplication()}><Check/> Dokončit přihlášku</button></footer></section>}
     </main></Shell>;
   }
 
@@ -3654,10 +3754,7 @@ export default function App() {
             Kód OC
             <input value={form.code} readOnly />
           </label>
-          <label>
-            Evidenční číslo
-            <input value={registrationNumber} readOnly />
-          </label>
+          <div className="wide"><RegistrationNumberPicker options={registrationOptions} mode={registrationMode} value={registrationNumber} onChange={(mode,value)=>{setRegistrationMode(mode);setRegistrationNumber(value)}}/></div>
           <label>
             E-mail
             <input

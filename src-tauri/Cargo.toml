@@ -1,6 +1,6 @@
 [package]
 name = "pojisteni-klienti"
-version = "0.25.0"
+version = "0.25.1"
 description = "Pojištění — funkční parita původní Access aplikace"
 authors = ["Federace pojištění"]
 edition = "2021"
@@ -28,6 +28,7 @@ chrono = "0.4"
 sha2 = "0.10"
 rfd = "0.15"
 printpdf = { version = "0.7", features = ["embedded_images"] }
+lopdf = { version = "0.31", features = ["pom_parser"], default-features = false }
 deunicode = "1"
 tauri-plugin-process = "2"
 zip = "4"

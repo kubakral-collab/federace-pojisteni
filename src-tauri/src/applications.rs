@@ -21,6 +21,7 @@ pub struct ApplicationInput {
     pub affiliation: String,
     pub organization: String,
     pub code: String,
+    pub registration_number: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -119,7 +120,7 @@ pub fn validate(input: &ApplicationInput) -> Result<(), String> {
     ] { if value.is_empty() { return Err(format!("Doplňte {label}.")); } }
     if !matches!(input.affiliation.as_str(), "FVČ" | "FV") { return Err("Zkontrolujte odbornou příslušnost.".into()); }
     if !matches!(input.category.as_str(), "A" | "B" | "C") { return Err("Vyberte právě jeden typ pojištění.".into()); }
-    if ![200_000,240_000,280_000,320_000,360_000,400_000].contains(&input.annual_amount) { return Err("Vyberte právě jeden roční limit.".into()); }
+    if input.annual_amount <= 0 { return Err("Vyberte právě jeden roční limit.".into()); }
     let personal = input.personal_id.trim();
     if personal.len()!=11 || personal.as_bytes().get(6)!=Some(&b'/') || !personal.chars().enumerate().all(|(i,c)| i==6 || c.is_ascii_digit()) { return Err("Zkontrolujte rodné číslo.".into()); }
     if input.postal_code.chars().filter(char::is_ascii_digit).count()!=5 || !input.postal_code.chars().all(|c|c.is_ascii_digit()||c==' ') { return Err("Zkontrolujte PSČ.".into()); }
@@ -148,6 +149,11 @@ fn cz_date(value:&str)->String { NaiveDate::parse_from_str(value,"%Y-%m-%d").map
 fn option_name(category:&str,loss:bool)->&'static str { match (category,loss) { ("B",false)=>"Standard",("B",true)=>"Standard + ztráta",("A",false)=>"Řidič",("A",true)=>"Řidič + ztráta",("C",false)=>"Strojvedoucí",("C",true)=>"Strojvedoucí + ztráta", _=>"" } }
 
 pub fn render_pdf(data:&PdfData, tariffs:&[(String,bool,i64,i64)], destination:&Path)->Result<Vec<u8>,String> {
+    let mut amounts=tariffs.iter().map(|rate|rate.2).collect::<Vec<_>>();
+    amounts.sort_unstable();
+    amounts.dedup();
+    if amounts.is_empty(){return Err("Pro přihlášku nejsou dostupné žádné platné roční limity.".into());}
+    if !data.blank&&!tariffs.iter().any(|(category,loss,amount,_)|category==&data.category&&*loss==data.loss&&*amount==data.annual_amount){return Err("Vybraný roční limit nemá platnou sazbu pro zvolenou variantu pojištění.".into());}
     let (document,page,layer)=PdfDocument::new("Přihláška k pojištění",Mm(210.0),Mm(297.0),"Přihláška");
     let regular=document.add_external_font(File::open(r"C:\Windows\Fonts\arial.ttf").map_err(|_|"Písmo Arial není dostupné.".to_string())?).map_err(|_|"Písmo Arial není dostupné.".to_string())?;
     let bold=document.add_external_font(File::open(r"C:\Windows\Fonts\arialbd.ttf").map_err(|_|"Písmo Arial není dostupné.".to_string())?).map_err(|_|"Písmo Arial není dostupné.".to_string())?;
@@ -165,7 +171,6 @@ pub fn render_pdf(data:&PdfData, tariffs:&[(String,bool,i64,i64)], destination:&
     let variants=[("B",false,"Standard"),("B",true,"Standard + ztráta"),("A",false,"Řidič"),("A",true,"Řidič + ztráta"),("C",false,"Strojvedoucí"),("C",true,"Strojvedoucí + ztráta")];
     text(&l,"Typ pojištění",5.6,139.0,243.0,&bold); text(&l,"Roční limit",5.6,176.0,243.0,&bold);
     for (i,(category,loss,name)) in variants.iter().enumerate(){ let yy=237.5-i as f32*4.2; let mark=if !data.blank&&data.category==*category&&data.loss==*loss{"X"}else{" "}; outline(&l,138.0,yy-1.0,3.2,3.2); text(&l,mark,5.5,139.0,yy,&bold); text(&l,*name,5.8,143.0,yy,&regular); }
-    let amounts=[200_000,240_000,280_000,320_000,360_000,400_000];
     for (i,amount) in amounts.iter().enumerate(){ let yy=237.5-i as f32*4.2; let mark=if !data.blank&&data.annual_amount==*amount{"X"}else{" "}; outline(&l,175.0,yy-1.0,3.2,3.2); text(&l,mark,5.5,176.0,yy,&bold); text(&l,format!("{} tis. Kč",amount/1000),5.8,180.0,yy,&regular); }
     text(&l,"Prohlašuji, že jsem byl seznámen s pojistnými podmínkami a s roční výší pojistné částky. Zároveň s tím se zavazuji uhradit",5.9,14.0,202.0,&bold);
     text(&l,format!("pojistnou částku na účet Federace vlakových čet (číslo účtu {}, VS platby - rodné číslo bez lomítka).",data.account),5.9,14.0,198.5,&bold);
@@ -190,9 +195,9 @@ pub fn render_pdf(data:&PdfData, tariffs:&[(String,bool,i64,i64)], destination:&
     text(&l,"VARIANTY POJIŠTĚNÍ",8.3,88.0,148.0,&bold); rule(&l,87.0,146.5,124.0,146.5);
     let table_variants=[("B",false,"Standard"),("A",false,"Řidič"),("C",false,"Strojvedoucí"),("B",true,"Standard + ztráta"),("A",true,"Řidič + ztráta"),("C",true,"Strojvedoucí + ztráta")];
     for (index,(category,loss,name)) in table_variants.iter().enumerate(){
-        let col=index%3; let row=index/3; let x=14.0+col as f32*64.0; let top=140.0-row as f32*44.0; let w=59.0; let row_h=4.1; let h=8.0+row_h*6.0;
+        let col=index%3; let row=index/3; let x=14.0+col as f32*64.0; let top=140.0-row as f32*44.0; let w=59.0; let row_h=(24.6/amounts.len() as f32).min(4.1); let h=8.0+row_h*amounts.len() as f32;
         text(&l,format!("varianta {}",name.to_uppercase()),5.5,x+1.0,top+3.0,&bold); outline(&l,x,top-h,w,h);
-        let widths=[8.0,16.0,17.0,18.0]; let mut xx=x; for width in widths.iter().take(3){xx+=*width;rule(&l,xx,top-h,xx,top);} rule(&l,x,top-8.0,x+w,top-8.0); for r in 1..6{rule(&l,x,top-8.0-r as f32*row_h,x+w,top-8.0-r as f32*row_h);}
+        let widths=[8.0,16.0,17.0,18.0]; let mut xx=x; for width in widths.iter().take(3){xx+=*width;rule(&l,xx,top-h,xx,top);} rule(&l,x,top-8.0,x+w,top-8.0); for r in 1..amounts.len(){rule(&l,x,top-8.0-r as f32*row_h,x+w,top-8.0-r as f32*row_h);}
         text(&l,"Kat.",4.6,x+1.0,top-5.0,&bold);text(&l,"Plnění pro",4.3,x+9.0,top-3.8,&bold);text(&l,"jednu PU",4.3,x+9.0,top-6.2,&bold);text(&l,"Roční limit",4.3,x+25.0,top-5.0,&bold);text(&l,"Roční",4.3,x+42.0,top-3.8,&bold);text(&l,"pojistné",4.3,x+42.0,top-6.2,&bold);
         for (r,amount) in amounts.iter().enumerate(){let yy=top-11.3-r as f32*row_h;let price=tariffs.iter().find(|(c,z,a,_)|c==category&&z==loss&&a==amount).map(|v|v.3).unwrap_or(0);text(&l,*category,4.8,x+2.5,yy,&regular);text(&l,format!("{}",money(amount/2)),4.5,x+9.0,yy,&regular);text(&l,format!("{}",money(*amount)),4.5,x+25.0,yy,&regular);text(&l,format!("{}",money(price)),4.5,x+43.0,yy,&bold);}
     }

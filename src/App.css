@@ -1,4 +1,5 @@
 :root {
+  --ui-scale: 1;
   font-family: "Segoe UI", sans-serif;
   color: #182235;
   background: #edf1f7;
@@ -16,6 +17,13 @@
   --status-success: #26966a;
   --status-info: #3784c7;
 }
+
+#root {
+  min-height: 100vh;
+  zoom: var(--ui-scale);
+}
+
+.registration-number-picker{border:1px solid #cbd5e1;border-radius:12px;padding:1rem;display:grid;gap:.75rem;background:#f8fafc}.registration-number-picker legend{font-weight:700;padding:0 .35rem}.registration-number-picker>label{display:flex;align-items:flex-start;gap:.65rem;padding:.75rem;border:1px solid #dbe3ec;border-radius:9px;background:#fff;cursor:pointer}.registration-number-picker>label:has(input:checked){border-color:#2b6cb0;background:#edf6ff}.registration-number-picker>label.disabled{cursor:not-allowed;opacity:.65}.registration-number-picker label span{display:grid;gap:.2rem}.registration-number-picker label small{color:#64748b}.registration-number-picker .registration-number-select{display:grid;gap:.35rem;max-width:18rem}.registration-number-picker select{min-width:10rem}
 
 @media (prefers-color-scheme: dark) {
   :root {
@@ -90,6 +98,7 @@ button {
   padding: 22px 16px;
   background: #102845;
   color: #fff;
+  overflow-y: auto;
 }
 
 .sidebar-brand {
@@ -136,6 +145,13 @@ button {
   background: transparent;
   color: #c7d3e2;
   padding: 11px 12px;
+  line-height: 1.3;
+  text-align: left;
+}
+
+.sidebar nav button svg,
+.sidebar-footer button svg {
+  flex: 0 0 auto;
 }
 
 .sidebar nav button:hover,
@@ -383,6 +399,83 @@ button {
 
 .settings-grid article small {
   font-size: 11px;
+}
+
+.font-size-settings-card {
+  display: grid;
+  gap: 24px;
+  max-width: 760px;
+  padding: 26px;
+  border: 1px solid #dce3ed;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.font-size-settings-card fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.font-size-settings-card legend {
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+.font-size-settings-card fieldset > p {
+  color: #637287;
+}
+
+.font-size-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.font-size-options label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 15px;
+  border: 1px solid #dce3ed;
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.font-size-options label:has(input:checked) {
+  border-color: #2868bd;
+  background: #edf5ff;
+}
+
+.font-size-options input {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+.font-size-preview {
+  display: grid;
+  gap: 8px;
+  padding: 20px;
+  border: 1px solid #cbd4e1;
+  border-radius: 10px;
+  background: #f7f9fc;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 700px) {
+  .font-size-options {
+    grid-template-columns: 1fr;
+  }
+}
+
+:is(html[data-font-scale="125"], html[data-font-scale="150"]) :is(.dashboard-grid, .settings-grid, .application-cards, .payment-summary-cards) {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+html[data-font-scale="150"] :is(.application-grid, .choice-grid, .tariff-form-grid, .member-filters, .claim-member-summary) {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .about-card {
@@ -1540,6 +1633,10 @@ button svg {
 }
 
 @media print {
+  #root {
+    zoom: 1;
+  }
+
   .sidebar,
   .page-header,
   .payment-workspace > header,
@@ -1725,6 +1822,220 @@ button svg {
 .application-start,.application-page{max-width:1180px;margin:0 auto}.application-start>header,.application-page>header{margin-bottom:26px}.application-start h1,.application-page h1{margin:5px 0 7px}.application-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}.application-cards>button{min-height:230px;padding:28px;border:1px solid var(--border);border-radius:18px;background:var(--surface);color:inherit;text-align:left;display:flex;flex-direction:column;align-items:flex-start;gap:15px;box-shadow:0 8px 24px rgb(18 41 70 / 7%);transition:.18s ease}.application-cards>button:hover{transform:translateY(-3px);border-color:#7ba8d6;box-shadow:0 14px 32px rgb(18 41 70 / 13%)}.application-cards svg{width:34px;height:34px;color:var(--action-edit)}.application-cards strong{font-size:1.25rem}.application-cards span,.muted{color:#637287;line-height:1.55}.application-steps{display:flex;gap:8px;flex-wrap:wrap;margin-top:20px}.application-steps span{padding:8px 12px;border-radius:999px;background:#e9eef5;color:#5d6b7d;font-size:.86rem}.application-steps .active{background:#153b68;color:white}.application-form,.application-summary{padding:28px;border:1px solid var(--border);border-radius:16px;background:var(--surface)}.application-form h2{margin:4px 0 18px}.application-form h2:not(:first-child){margin-top:30px}.application-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.application-grid label{display:grid;gap:7px}.application-grid small{color:#637287}.choice-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.choice-card{display:flex;align-items:center;gap:10px;padding:14px;border:1px solid var(--border);border-radius:10px;cursor:pointer}.choice-card:has(input:checked){border-color:#2b6fad;background:#edf6ff}.choice-card input{accent-color:#22649e}.application-price{margin-top:22px;padding:18px;border-radius:12px;background:#edf5fb;display:grid;gap:5px}.application-price strong{font-size:1.55rem;color:#153b68}.application-price small{color:#53677e}.application-summary dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--border);border:1px solid var(--border);border-radius:10px;overflow:hidden}.application-summary dl div{padding:14px;background:white}.application-summary dt{font-size:.8rem;color:#637287}.application-summary dd{margin:5px 0 0;font-weight:650}.back-link{display:flex;align-items:center;gap:6px;margin-bottom:16px;border:0;background:transparent;color:#315d88}.back-link svg{width:18px}.application-form .form-actions,.application-summary .form-actions{margin-top:26px}
 
 @media(max-width:900px){.application-cards,.application-grid,.choice-grid{grid-template-columns:1fr 1fr}}@media(max-width:620px){.application-cards,.application-grid,.choice-grid,.application-summary dl{grid-template-columns:1fr}}
+
+/* Přihláška 0.25.1 — kompaktní karty bez zásahu do formulářové logiky. */
+.application-form-redesign {
+  display: grid;
+  gap: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.application-section {
+  min-width: 0;
+  margin: 0;
+  padding: clamp(18px, 2.2vw, 26px);
+  border: 1px solid #dce5ef;
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgb(18 41 70 / 6%);
+}
+
+.application-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.application-section-heading small,
+.application-choice-section > p {
+  color: #637287;
+}
+
+.application-section-heading small {
+  display: block;
+  margin-bottom: 3px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.application-section-heading h2,
+.application-choice-section legend {
+  margin: 0;
+  color: #183f69;
+  font-size: 1.12rem;
+  font-weight: 750;
+}
+
+.application-section-heading > span {
+  color: #637287;
+  font-size: .82rem;
+  text-align: right;
+}
+
+.application-form-redesign .personal-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(15rem, 100%), 1fr));
+  gap: 14px 16px;
+}
+
+.application-form-redesign .application-grid label {
+  min-width: 0;
+  color: #34475e;
+  font-weight: 650;
+}
+
+.application-form-redesign .application-grid input {
+  width: 100%;
+  min-width: 0;
+  min-height: 43px;
+  box-sizing: border-box;
+}
+
+.application-field-wide {
+  grid-column: 1 / -1;
+  max-width: 22rem;
+}
+
+.application-field-wide > small {
+  display: inline;
+  margin-left: 4px;
+  font-weight: 500;
+}
+
+.application-choice-section {
+  padding-top: 20px;
+}
+
+.application-choice-section legend {
+  padding: 0 8px;
+}
+
+.application-choice-section > p {
+  margin: 0 0 15px;
+  font-size: .9rem;
+}
+
+.application-form-redesign .choice-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(12rem, 100%), 1fr));
+  gap: 10px;
+}
+
+.application-form-redesign .choice-grid.limits {
+  grid-template-columns: repeat(auto-fit, minmax(min(9.5rem, 100%), 1fr));
+}
+
+.application-form-redesign .choice-card {
+  position: relative;
+  min-width: 0;
+  min-height: 56px;
+  padding: 12px 14px;
+  border: 1px solid #ccd8e5;
+  border-radius: 12px;
+  background: #fbfcfe;
+  box-sizing: border-box;
+  transition: border-color .15s ease, background-color .15s ease, box-shadow .15s ease;
+}
+
+.application-form-redesign .choice-card:hover {
+  border-color: #83a9cc;
+  background: #f5f9fd;
+}
+
+.application-form-redesign .choice-card:focus-within {
+  outline: 3px solid rgb(43 111 173 / 20%);
+  outline-offset: 2px;
+}
+
+.application-form-redesign .choice-card:has(input:checked) {
+  border-color: #2369a5;
+  background: #eaf4fd;
+  box-shadow: inset 0 0 0 1px #2369a5;
+}
+
+.application-form-redesign .choice-card input {
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  margin: 0;
+  accent-color: #2369a5;
+}
+
+.application-form-redesign .choice-card span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 680;
+  line-height: 1.25;
+}
+
+.application-form-redesign .application-price {
+  grid-template-columns: repeat(auto-fit, minmax(min(15rem, 100%), 1fr));
+  gap: 1px;
+  margin-top: 18px;
+  padding: 1px;
+  overflow: hidden;
+  border: 1px solid #cfe0ee;
+  border-radius: 13px;
+  background: #cfe0ee;
+}
+
+.application-price > div {
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 16px 18px;
+  background: #edf5fb;
+}
+
+.application-price > div > span {
+  color: #53677e;
+  font-size: .82rem;
+  font-weight: 700;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+}
+
+.application-price > div > strong {
+  overflow-wrap: anywhere;
+}
+
+.application-navigation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px 2px 2px;
+  border-top: 1px solid #dce5ef;
+}
+
+.application-navigation button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 43px;
+}
+
+.application-navigation svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+}
+
+@media (max-width: 900px) {
+  .application-field-wide { max-width: none; }
+}
+
+@media (max-width: 620px) {
+  .application-section-heading { display: block; }
+  .application-section-heading > span { display: block; margin-top: 6px; text-align: left; }
+  .application-navigation { align-items: stretch; }
+  .application-navigation button { flex: 1; }
+}
 
 .update-settings-card {
   max-width: 720px;

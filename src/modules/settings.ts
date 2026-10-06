@@ -1,10 +1,11 @@
 export type SettingsModule = {
-  id: "tariffs" | "payments" | "email" | "receipts" | "updates" | "limits" | "organizations" | "users" | "database" | "backups";
+  id: "font-size" | "tariffs" | "payments" | "email" | "receipts" | "updates" | "limits" | "organizations" | "users" | "database" | "backups";
   label: string;
   enabled: boolean;
 };
 
 export const SETTINGS_MODULES: SettingsModule[] = [
+  { id: "font-size", label: "Velikost písma", enabled: true },
   { id: "tariffs", label: "Sazby pojistného", enabled: true },
   { id: "payments", label: "Platební údaje", enabled: true },
   { id: "email", label: "E-mail (SMTP)", enabled: true },

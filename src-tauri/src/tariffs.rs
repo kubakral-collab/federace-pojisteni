@@ -184,6 +184,23 @@ pub fn insured_amounts(connection: &Connection) -> rusqlite::Result<Vec<i64>> {
     amounts
 }
 
+pub fn application_amounts(connection: &Connection, date: NaiveDate) -> rusqlite::Result<Vec<i64>> {
+    let mut statement = connection.prepare(
+        r#"SELECT "pojistna_castka"
+           FROM "sazby_pojistneho"
+           WHERE "aktivni" = 1
+             AND date("platnost_od") <= date(?1)
+             AND ("platnost_do" IS NULL OR date("platnost_do") >= date(?1))
+           GROUP BY "pojistna_castka"
+           HAVING COUNT(DISTINCT "kategorie" || ':' || "pojisteni_ztraty") = 6
+           ORDER BY "pojistna_castka""#,
+    )?;
+    let amounts = statement
+        .query_map([date.format("%Y-%m-%d").to_string()], |row| row.get(0))?
+        .collect();
+    amounts
+}
+
 pub fn list(connection: &Connection) -> rusqlite::Result<Vec<TariffRate>> {
     let mut statement = connection.prepare(
         r#"SELECT "id", "pojistna_castka", "kategorie", "pojisteni_ztraty",

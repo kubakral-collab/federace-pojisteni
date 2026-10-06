@@ -1,5 +1,6 @@
 use crate::email_service::{self, EmailMessage};
 use chrono::Local;
+use lopdf::{Document as LoDocument, Object as LoObject, ObjectId as LoObjectId};
 use printpdf::{
     path::{PaintMode, WindingOrder},
     Color, Image, ImageTransform, Mm, PdfDocument, Point, Polygon, Rgb,
@@ -7,11 +8,14 @@ use printpdf::{
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{fs::File, io::BufWriter, path::Path};
+use std::{collections::BTreeMap, fs::File, io::BufWriter, path::Path};
 
-const TEMPLATE_1: &[u8] = include_bytes!("../resources/receipt-template-1.jpg");
-const TEMPLATE_2: &[u8] = include_bytes!("../resources/receipt-template-2.jpg");
-const TEMPLATE_3: &[u8] = include_bytes!("../resources/receipt-template-3.jpg");
+const TEMPLATE_1: &[u8] = include_bytes!("../resources/receipt-template-1.png");
+const TEMPLATE_2: &[u8] = include_bytes!("../resources/receipt-template-2.png");
+const TEMPLATE_3: &[u8] = include_bytes!("../resources/receipt-template-3.png");
+const TEMPLATE_YEAR: i32 = 2026;
+const TEMPLATE_POLICYHOLDER: &str = "Federace vlakových čet - presidium";
+const TEMPLATE_CONTRACT_NUMBER: &str = "650 12 00002";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -186,9 +190,7 @@ pub fn load_basis(
     let data = snapshot(connection, row_id, year)?;
     validate_required(&data)?;
     let settings = load_settings(connection)?;
-    if settings.contract_number.trim().is_empty() {
-        return Err("Doklad nelze vystavit: chybí číslo pojistné smlouvy.".into());
-    }
+    validate_template_settings(&settings)?;
     let mut statement = connection.prepare(
         r#"SELECT "DatumPrijeti" FROM "PlatbyClenu"
            WHERE "PojistnyZaznamRowId"=?1 ORDER BY "DatumPrijeti", "Id""#,
@@ -247,12 +249,45 @@ fn validate_required(snapshot: &Snapshot) -> Result<(), String> {
     if snapshot.premium <= 0 {
         return Err("Doklad nelze vystavit: chybí roční pojistné.".into());
     }
+    if snapshot.registration.trim().parse::<i64>().ok().filter(|value| *value > 0).is_none() {
+        return Err("Doklad nelze vystavit: evidenční číslo není platné kladné číslo.".into());
+    }
+    if !snapshot.insurance_from.starts_with(&format!("{TEMPLATE_YEAR}-"))
+        || !snapshot.insurance_to.starts_with(&format!("{TEMPLATE_YEAR}-"))
+    {
+        return Err(format!(
+            "Doklad nelze vystavit: dodaná šablona je určena pouze pro pojistný rok {TEMPLATE_YEAR}."
+        ));
+    }
     Ok(())
 }
 
-fn font_file() -> Result<File, String> {
-    File::open(r"C:\Windows\Fonts\arial.ttf")
+fn validate_template_settings(settings: &ReceiptSettings) -> Result<(), String> {
+    if settings.contract_number.trim().is_empty() {
+        return Err("Doklad nelze vystavit: chybí číslo pojistné smlouvy.".into());
+    }
+    if settings.contract_number.trim() != TEMPLATE_CONTRACT_NUMBER {
+        return Err(format!(
+            "Doklad nelze vystavit: šablona obsahuje smlouvu {TEMPLATE_CONTRACT_NUMBER}, ale nastavení obsahuje {}.",
+            settings.contract_number.trim()
+        ));
+    }
+    if settings.policyholder.trim() != TEMPLATE_POLICYHOLDER {
+        return Err(format!(
+            "Doklad nelze vystavit: pojistník v nastavení neodpovídá dodané šabloně ({TEMPLATE_POLICYHOLDER})."
+        ));
+    }
+    Ok(())
+}
+
+fn regular_font_file() -> Result<File, String> {
+    File::open(r"C:\Windows\Fonts\calibri.ttf")
         .map_err(|_| "Písmo pro doklad není dostupné.".to_string())
+}
+
+fn bold_font_file() -> Result<File, String> {
+    File::open(r"C:\Windows\Fonts\calibrib.ttf")
+        .map_err(|_| "Tučné písmo pro doklad není dostupné.".to_string())
 }
 
 fn add_background(layer: &printpdf::PdfLayerReference, bytes: &[u8]) -> Result<(), String> {
@@ -303,63 +338,68 @@ fn white_box(layer: &printpdf::PdfLayerReference, x: f32, y: f32, width: f32, he
     });
 }
 
-fn create_pdf(snapshot: &Snapshot, path: &Path) -> Result<Vec<u8>, String> {
+fn insurance_category(snapshot: &Snapshot) -> String {
+    if snapshot.loss_insurance {
+        format!("{} + pojištění na ztrátu", snapshot.category)
+    } else {
+        snapshot.category.clone()
+    }
+}
+
+fn registration_number(snapshot: &Snapshot) -> Result<String, String> {
+    let registration = snapshot
+        .registration
+        .trim()
+        .parse::<i64>()
+        .map_err(|_| "Doklad nelze vystavit: evidenční číslo není platné kladné číslo.".to_string())?;
+    if registration <= 0 {
+        return Err("Doklad nelze vystavit: evidenční číslo není platné kladné číslo.".into());
+    }
+    Ok(format!("{}{:04}", snapshot.organization_code.trim(), registration))
+}
+
+fn create_pdf(snapshot: &Snapshot, issued_on: &str, path: &Path) -> Result<Vec<u8>, String> {
     let (document, page1, layer1) =
         PdfDocument::new("Certifikát o pojištění", Mm(210.0), Mm(297.0), "Strana 1");
     let first = document.get_page(page1).get_layer(layer1);
     add_background(&first, TEMPLATE_1)?;
-    let font = document
-        .add_external_font(font_file()?)
+    let regular = document
+        .add_external_font(regular_font_file()?)
         .map_err(|_| "Písmo pro doklad se nepodařilo načíst.".to_string())?;
-    white_box(&first, 84.0, 139.0, 27.0, 7.0);
-    white_box(&first, 153.0, 92.0, 38.0, 7.0);
-    white_box(&first, 8.0, 29.0, 45.0, 7.0);
+    let bold = document
+        .add_external_font(bold_font_file()?)
+        .map_err(|_| "Tučné písmo pro doklad se nepodařilo načíst.".to_string())?;
+    white_box(&first, 86.4, 139.2, 27.8, 5.2);
+    white_box(&first, 147.3, 93.2, 47.2, 5.2);
+    white_box(&first, 8.5, 31.3, 42.0, 5.3);
     first.set_fill_color(Color::Rgb(Rgb::new(0.18, 0.46, 0.55, None)));
     first.use_text(
-        cz_date(&snapshot.insurance_from),
-        10.0,
-        Mm(87.0),
-        Mm(141.0),
-        &font,
+        format!("od {}", cz_date(&snapshot.insurance_from)),
+        12.02,
+        Mm(86.2),
+        Mm(141.73),
+        &regular,
     );
     first.use_text(
-        cz_date(&snapshot.insurance_to),
-        10.0,
-        Mm(153.0),
-        Mm(94.0),
-        &font,
+        format!("{}, případně", cz_date(&snapshot.insurance_to)),
+        12.02,
+        Mm(147.64),
+        Mm(95.7),
+        &regular,
     );
-    first.use_text("řádně", 10.0, Mm(176.0), Mm(94.0), &font);
     first.use_text(
-        format!(
-            "V Praze dne {}",
-            Local::now().date_naive().format("%d.%m.%Y")
-        ),
-        10.0,
+        format!("V Praze dne {}", cz_date(issued_on)),
+        12.02,
         Mm(9.0),
-        Mm(31.0),
-        &font,
+        Mm(33.79),
+        &regular,
     );
     let (page2, layer2) = document.add_page(Mm(210.0), Mm(297.0), "Strana 2");
     let layer = document.get_page(page2).get_layer(layer2);
     add_background(&layer, TEMPLATE_2)?;
-    white_box(&layer, 7.0, 43.5, 188.0, 49.5);
-    layer.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
-    layer.add_polygon(Polygon {
-        rings: vec![vec![
-            (Point::new(Mm(4.5), Mm(43.5)), false),
-            (Point::new(Mm(195.5), Mm(43.5)), false),
-            (Point::new(Mm(195.5), Mm(43.8)), false),
-            (Point::new(Mm(4.5), Mm(43.8)), false),
-        ]],
-        mode: PaintMode::Fill,
-        winding_order: WindingOrder::NonZero,
-    });
+    white_box(&layer, 12.3, 50.0, 182.2, 43.5);
     layer.set_fill_color(Color::Rgb(Rgb::new(0.18, 0.46, 0.55, None)));
-    let name = format!(
-        "{} {} {}",
-        snapshot.title, snapshot.first_name, snapshot.last_name
-    )
+    let name = format!("{} {}", snapshot.last_name, snapshot.first_name)
     .split_whitespace()
     .collect::<Vec<_>>()
     .join(" ");
@@ -367,39 +407,40 @@ fn create_pdf(snapshot: &Snapshot, path: &Path) -> Result<Vec<u8>, String> {
         "{}; {}; {}",
         snapshot.city, snapshot.address, snapshot.postal_code
     );
-    let registration = format!(
-        "{}{:04}",
-        snapshot.organization_code,
-        snapshot.registration.parse::<i64>().unwrap_or(0)
-    );
-    let values = [
-        (9.0, 86.3, "Jméno a příjmení:".into()),
-        (45.0, 86.3, name),
-        (135.0, 86.3, "Rodné číslo:".into()),
-        (161.0, 86.3, snapshot.personal_id.clone()),
-        (9.0, 79.8, "Evidenční číslo:".into()),
-        (45.0, 79.8, registration),
-        (102.0, 79.8, "Základní organizace:".into()),
-        (151.0, 79.8, snapshot.organization.clone()),
-        (9.0, 73.4, "Adresa bydliště:".into()),
-        (45.0, 73.4, address),
-        (9.0, 66.8, "Stát:".into()),
-        (45.0, 66.8, snapshot.country.clone()),
-        (9.0, 60.3, "Platnost pojištění od:".into()),
-        (56.0, 60.3, cz_date(&snapshot.insurance_from)),
-        (82.0, 60.3, "do:".into()),
-        (95.0, 60.3, cz_date(&snapshot.insurance_to)),
-        (9.0, 53.7, "Limit pojistného plnění:".into()),
-        (57.0, 53.7, money(snapshot.insured_amount)),
-        (112.0, 53.7, "Kategorie:".into()),
-        (135.0, 53.7, snapshot.category.clone()),
-        (9.0, 47.2, "Pojistné:".into()),
-        (31.0, 47.2, money(snapshot.premium)),
-        (74.0, 47.2, "Uhrazeno:".into()),
-        (98.0, 47.2, money(snapshot.paid)),
+    let registration = registration_number(snapshot)?;
+    let labels = [
+        (13.91, 90.42, "Jméno a příjmení:"),
+        (135.90, 90.42, "Rodné číslo:"),
+        (13.91, 84.44, "Evidenční číslo:"),
+        (98.87, 84.44, "Základní organizace:"),
+        (13.91, 78.44, "Adresa bydliště:"),
+        (13.91, 72.44, "Stát:"),
+        (13.91, 66.44, "Platnost pojištění od:"),
+        (81.24, 66.44, "do:"),
+        (13.81, 60.43, "Limit pojistného plnění:"),
+        (99.91, 60.43, "Kategorie pojištění:"),
+        (13.86, 54.30, "Pojistné:"),
+        (65.85, 54.30, "Uhrazené pojistné:"),
     ];
-    for (x, y, text) in values {
-        layer.use_text(text, 9.0, Mm(x), Mm(y), &font);
+    for (x, y, text) in labels {
+        layer.use_text(text, 10.0, Mm(x), Mm(y), &regular);
+    }
+    let values = [
+        (45.80, 89.88, 12.0, name),
+        (161.17, 89.88, 12.0, snapshot.personal_id.clone()),
+        (45.80, 83.85, 12.0, registration),
+        (132.06, 84.44, 10.0, snapshot.organization.clone()),
+        (45.94, 78.44, 10.0, address),
+        (45.82, 72.44, 10.0, snapshot.country.clone()),
+        (56.64, 66.44, 10.0, cz_date(&snapshot.insurance_from)),
+        (95.28, 66.44, 10.0, cz_date(&snapshot.insurance_to)),
+        (51.87, 60.43, 10.0, money(snapshot.insured_amount)),
+        (134.00, 60.43, 10.0, insurance_category(snapshot)),
+        (31.16, 54.30, 10.0, money(snapshot.premium)),
+        (97.70, 54.30, 10.0, money(snapshot.paid)),
+    ];
+    for (x, y, size, text) in values {
+        layer.use_text(text, size, Mm(x), Mm(y), &bold);
     }
     let (page3, layer3) = document.add_page(Mm(210.0), Mm(297.0), "Strana 3");
     add_background(&document.get_page(page3).get_layer(layer3), TEMPLATE_3)?;
@@ -456,6 +497,7 @@ pub fn create_if_eligible(
     let mut connection =
         Connection::open(database).map_err(|_| "Doklad se nepodařilo vytvořit.".to_string())?;
     let settings = load_settings(&connection)?;
+    validate_template_settings(&settings)?;
     if automatic && !settings.automatic_creation {
         return Ok(None);
     }
@@ -482,7 +524,8 @@ pub fn create_if_eligible(
     }
     if let Some(id)=connection.query_row(r#"SELECT "Id" FROM "DokladyOUhrade" WHERE "IdentifikatorClena"=?1 AND "PojistnyRok"=?2"#,params![data.identifier,year],|row|row.get(0)).optional().map_err(|_| "Doklad se nepodařilo ověřit.".to_string())? { return Ok(Some(id)); }
     let temp = std::env::temp_dir().join(format!("doklad-{}-{}.pdf", data.identifier, year));
-    let pdf = match create_pdf(&data, &temp) {
+    let issued = Local::now().date_naive().format("%Y-%m-%d").to_string();
+    let pdf = match create_pdf(&data, &issued, &temp) {
         Ok(pdf) => pdf,
         Err(error) => {
             connection.execute(
@@ -493,7 +536,6 @@ pub fn create_if_eligible(
         }
     };
     let checksum = format!("{:x}", Sha256::digest(&pdf));
-    let issued = Local::now().date_naive().format("%Y-%m-%d").to_string();
     let name = format!("{} {} {}", data.title, data.first_name, data.last_name)
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -524,6 +566,108 @@ pub fn create_if_eligible(
 
 pub fn pdf(connection: &Connection, id: i64) -> Result<(String, Vec<u8>), String> {
     connection.query_row(r#"SELECT printf('Doklad_%d_%s.pdf',"PojistnyRok",replace("EvidencniCislo",' ','')),"Pdf" FROM "DokladyOUhrade" WHERE "Id"=?1"#,[id],|row|Ok((row.get(0)?,row.get(1)?))).map_err(|_|"Doklad se nepodařilo načíst.".to_string())
+}
+
+pub fn merge_pdf_documents(documents: Vec<Vec<u8>>) -> Result<Vec<u8>, String> {
+    if documents.is_empty() {
+        return Err("Hromadné potvrzení neobsahuje žádný dokument.".into());
+    }
+    let mut max_id = 1;
+    let mut pages = BTreeMap::<LoObjectId, LoObject>::new();
+    let mut objects = BTreeMap::<LoObjectId, LoObject>::new();
+    let mut output = LoDocument::with_version("1.5");
+
+    for bytes in documents {
+        let mut document = LoDocument::load_mem(&bytes)
+            .map_err(|_| "Jedno z potvrzení není platný PDF dokument.".to_string())?;
+        document.renumber_objects_with(max_id);
+        max_id = document.max_id + 1;
+        for object_id in document.get_pages().into_values() {
+            let page = document
+                .get_object(object_id)
+                .map_err(|_| "Stránku potvrzení se nepodařilo načíst.".to_string())?
+                .to_owned();
+            pages.insert(object_id, page);
+        }
+        objects.extend(document.objects);
+    }
+
+    let mut catalog: Option<(LoObjectId, LoObject)> = None;
+    let mut page_tree: Option<(LoObjectId, LoObject)> = None;
+    for (object_id, object) in objects {
+        match object.type_name().unwrap_or("") {
+            "Catalog" => {
+                if catalog.is_none() {
+                    catalog = Some((object_id, object));
+                }
+            }
+            "Pages" => {
+                if page_tree.is_none() {
+                    page_tree = Some((object_id, object));
+                }
+            }
+            "Page" | "Outlines" | "Outline" => {}
+            _ => {
+                output.objects.insert(object_id, object);
+            }
+        }
+    }
+
+    let (page_tree_id, page_tree_object) = page_tree
+        .ok_or_else(|| "V potvrzeních nebyl nalezen strom stránek.".to_string())?;
+    for (object_id, object) in &pages {
+        let mut dictionary = object
+            .as_dict()
+            .map_err(|_| "Stránka potvrzení má neplatnou strukturu.".to_string())?
+            .clone();
+        dictionary.set("Parent", page_tree_id);
+        output.objects.insert(*object_id, LoObject::Dictionary(dictionary));
+    }
+    let mut page_tree_dictionary = page_tree_object
+        .as_dict()
+        .map_err(|_| "Strom stránek potvrzení má neplatnou strukturu.".to_string())?
+        .clone();
+    page_tree_dictionary.set("Count", pages.len() as u32);
+    page_tree_dictionary.set(
+        "Kids",
+        pages
+            .keys()
+            .copied()
+            .map(LoObject::Reference)
+            .collect::<Vec<_>>(),
+    );
+    output
+        .objects
+        .insert(page_tree_id, LoObject::Dictionary(page_tree_dictionary));
+
+    let (catalog_id, catalog_object) =
+        catalog.ok_or_else(|| "V potvrzeních nebyl nalezen katalog PDF.".to_string())?;
+    let mut catalog_dictionary = catalog_object
+        .as_dict()
+        .map_err(|_| "Katalog potvrzení má neplatnou strukturu.".to_string())?
+        .clone();
+    catalog_dictionary.set("Pages", page_tree_id);
+    catalog_dictionary.remove(b"Outlines");
+    output
+        .objects
+        .insert(catalog_id, LoObject::Dictionary(catalog_dictionary));
+    output.trailer.set("Root", catalog_id);
+    output.max_id = output.objects.keys().map(|id| id.0).max().unwrap_or(0);
+    output.renumber_objects();
+    output.compress();
+
+    let mut bytes = Vec::new();
+    output
+        .save_to(&mut bytes)
+        .map_err(|_| "Hromadné potvrzení se nepodařilo sestavit.".to_string())?;
+    let page_count = LoDocument::load_mem(&bytes)
+        .map_err(|_| "Výsledné hromadné potvrzení není platný PDF dokument.".to_string())?
+        .get_pages()
+        .len();
+    if page_count != pages.len() {
+        return Err("Hromadné potvrzení neobsahuje všechny očekávané stránky.".into());
+    }
+    Ok(bytes)
 }
 
 pub fn send(database: &Path, user: &str, id: i64) -> Result<(), String> {
@@ -611,6 +755,19 @@ mod tests {
     }
 
     #[test]
+    fn invalid_registration_is_not_replaced_with_a_fictitious_zero() {
+        let (_directory, database, row_id) = receipt_database(None, None, Some("Jan"), false);
+        let connection = Connection::open(database).unwrap();
+        connection
+            .execute(r#"UPDATE "Seznam" SET "EvČíslo"='neplatné' WHERE rowid=?1"#, [row_id])
+            .unwrap();
+        assert_eq!(
+            load_basis(&connection, row_id, 2026).unwrap_err(),
+            "Doklad nelze vystavit: evidenční číslo není platné kladné číslo."
+        );
+    }
+
+    #[test]
     fn receipt_schema_prevents_duplicate_member_year() {
         let connection = Connection::open_in_memory().unwrap();
         ensure_schema(&connection).unwrap();
@@ -642,33 +799,36 @@ mod tests {
     fn creates_three_page_access_layout_pdf() {
         let path = std::env::temp_dir().join("pojisteni-receipt-layout-test.pdf");
         let snapshot = Snapshot {
-            identifier: "test-member".into(),
+            identifier: "kostal-2026".into(),
             payment_id: 1,
             title: "Ing.".into(),
-            first_name: "Jan".into(),
-            last_name: "Novák".into(),
-            personal_id: "780101/1234".into(),
-            registration: "53".into(),
-            organization_code: "2".into(),
-            organization: "FVČ".into(),
-            address: "Testovací 1".into(),
-            city: "Praha".into(),
-            postal_code: "110 00".into(),
+            first_name: "Aleš".into(),
+            last_name: "Košťál".into(),
+            personal_id: "780326/5536".into(),
+            registration: "1".into(),
+            organization_code: "1".into(),
+            organization: "BOHUMÍN".into(),
+            address: "9.května 100".into(),
+            city: "Bohumín - Nový Bohumín".into(),
+            postal_code: "735 81".into(),
             country: "Česká republika".into(),
             category: "B".into(),
             insurance_from: "2026-01-01".into(),
             insurance_to: "2026-12-31".into(),
-            insured_amount: 320_000,
-            premium: 781,
-            paid: 781,
+            insured_amount: 200_000,
+            premium: 653,
+            paid: 653,
             paid_on: "2026-07-31".into(),
             email: "test@example.invalid".into(),
             loss_insurance: true,
             termination: String::new(),
         };
-        let pdf = create_pdf(&snapshot, &path).unwrap();
+        let pdf = create_pdf(&snapshot, "2026-08-01", &path).unwrap();
         assert!(pdf.starts_with(b"%PDF"));
         assert!(pdf.len() > 100_000);
+        assert_eq!(insurance_category(&snapshot), "B + pojištění na ztrátu");
+        let batch = merge_pdf_documents(vec![pdf.clone(), pdf]).unwrap();
+        assert_eq!(LoDocument::load_mem(&batch).unwrap().get_pages().len(), 6);
     }
 
     #[test]
@@ -840,6 +1000,60 @@ mod tests {
             load_basis(&connection, row_id, 2026).unwrap_err(),
             "Doklad nelze vystavit: chybí číslo pojistné smlouvy."
         );
+    }
+
+    #[test]
+    fn template_mismatch_is_reported_instead_of_printing_wrong_static_data() {
+        let (_directory, database, row_id) = receipt_database(None, None, Some("Jan"), false);
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute(
+                r#"UPDATE "NastaveniDokladu" SET "CisloSmlouvy"='999 99 99999' WHERE "Id"=1"#,
+                [],
+            )
+            .unwrap();
+        let error = load_basis(&connection, row_id, 2026).unwrap_err();
+        assert!(error.contains("šablona obsahuje smlouvu 650 12 00002"));
+        assert!(error.contains("999 99 99999"));
+    }
+
+    #[test]
+    fn long_name_and_address_generate_without_changing_member_data() {
+        let (_directory, database, row_id) = receipt_database(
+            None,
+            Some("Náměstí Československých železničářů 123"),
+            Some("Alexandr"),
+            true,
+        );
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute(
+                r#"UPDATE "Seznam" SET "Příjmení"='Nejdelší-Testovací-Příjmení',"Město"='Brandýs nad Labem-Stará Boleslav' WHERE rowid=?1"#,
+                [row_id],
+            )
+            .unwrap();
+        let before: (String, String, String, i64, i64) = connection
+            .query_row(
+                r#"SELECT "Jméno","Příjmení","Adresa","PojistnáČástka","RočPojistné" FROM "Seznam" WHERE rowid=?1"#,
+                [row_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            )
+            .unwrap();
+        drop(connection);
+
+        assert!(create_if_eligible(&database, "tester", row_id, 2026, false)
+            .unwrap()
+            .is_some());
+
+        let connection = Connection::open(database).unwrap();
+        let after: (String, String, String, i64, i64) = connection
+            .query_row(
+                r#"SELECT "Jméno","Příjmení","Adresa","PojistnáČástka","RočPojistné" FROM "Seznam" WHERE rowid=?1"#,
+                [row_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!(before, after);
     }
 
     #[test]
