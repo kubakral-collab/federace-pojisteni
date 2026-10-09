@@ -3510,6 +3510,38 @@ mod tests {
         (directory, database)
     }
 
+    fn registration_number_fixture() -> (tempfile::TempDir, PathBuf) {
+        let (directory, database) = synthetic_database();
+        let connection = open_write(&database).unwrap();
+        connection
+            .execute_batch(
+                r#"
+                DELETE FROM "Seznam";
+                INSERT INTO "Seznam" (
+                    "Identifikátor", "PojištěníOd", "PojištěníDo", "RočPojistné",
+                    "PojistnáČástka", "Kategorie", "Ztráta", "KódOC", "EvČíslo",
+                    "Příjmení", "Jméno", "RodnéČíslo", "OdbPříslušnost", "ZO",
+                    "SkutÚhrada", "Doklad", "Tisk"
+                ) VALUES
+                    (2026001, '2026-01-01', '2026-12-31', 495, 200000, 'B', 0, '1', 1,
+                     'První', 'Aktuální', 'CURRENT-0001', 'FVČ', 'TEST', 0, 0, 0),
+                    (20261344, '2026-01-01', '2026-12-31', 495, 200000, 'B', 0, '1', 1344,
+                     'Poslední', 'Aktuální', 'CURRENT-1344', 'FVČ', 'TEST', 0, 0, 0);
+                CREATE TABLE "2009" (
+                    "EvČíslo" INTEGER,
+                    "Příjmení" TEXT,
+                    "Jméno" TEXT,
+                    "RodnéČíslo" TEXT,
+                    "Poznámka" TEXT
+                );
+                INSERT INTO "2009" VALUES
+                    (943, 'Historický', 'Držitel', 'HISTORY-0943', 'Nesmí být změněno ani připojeno');
+                "#,
+            )
+            .unwrap();
+        (directory, database)
+    }
+
     #[test]
     fn first_run_creates_argon2_admin_without_default_password() {
         let directory = tempfile::tempdir().unwrap();
@@ -4486,11 +4518,7 @@ mod tests {
 
     #[test]
     fn representative_copy_assigns_943_and_1345_without_touching_history() {
-        let source=PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join(DATABASE_FILE);
-        let directory=tempfile::tempdir().unwrap();
-        let database=directory.path().join(DATABASE_FILE);
-        fs::copy(source,&database).unwrap();
-        migrations::migrate(&database,&directory.path().join("migration-backups"),true).unwrap();
+        let (_directory, database) = registration_number_fixture();
         {
             let connection=open_write(&database).unwrap();
             ensure_member_contact_schema(&connection).unwrap();
@@ -4503,8 +4531,13 @@ mod tests {
         let options=registration_number_options(&before).unwrap();
         assert_eq!(options.next_number,1345);
         assert!(options.free_numbers.contains(&943));
-        let historical_943:i64=before.query_row(r#"SELECT COUNT(*) FROM "2009" WHERE CAST("EvČíslo" AS INTEGER)=943"#,[],|row|row.get(0)).unwrap();
-        assert!(historical_943>0);
+        let historical_943: (String, String, String, String) = before
+            .query_row(
+                r#"SELECT "Příjmení","Jméno","RodnéČíslo","Poznámka" FROM "2009" WHERE CAST("EvČíslo" AS INTEGER)=943"#,
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
         drop(before);
 
         let application=applications::ApplicationInput{
@@ -4514,8 +4547,37 @@ mod tests {
         assert_eq!(result.registration_number,943);
         let connection=open_read_only(&database).unwrap();
         let new_row:i64=connection.query_row(r#"SELECT rowid FROM "Seznam" WHERE "Identifikátor"=?1 AND CAST("EvČíslo" AS INTEGER)=943"#,[result.identifier],|row|row.get(0)).unwrap();
-        assert_eq!(connection.query_row(r#"SELECT COUNT(*) FROM "2009" WHERE CAST("EvČíslo" AS INTEGER)=943"#,[],|row|row.get::<_,i64>(0)).unwrap(),historical_943);
+        assert_eq!(
+            connection
+                .query_row(
+                    r#"SELECT "Příjmení","Jméno","RodnéČíslo","Poznámka" FROM "2009" WHERE CAST("EvČíslo" AS INTEGER)=943"#,
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?)),
+                )
+                .unwrap(),
+            historical_943
+        );
         assert_eq!(connection.query_row(r#"SELECT COUNT(*) FROM "PojistneUdalosti" WHERE "PojistnyZaznamRowId"=?1"#,[new_row],|row|row.get::<_,i64>(0)).unwrap(),0);
+        assert_eq!(
+            connection
+                .query_row(
+                    r#"SELECT COUNT(*) FROM "Seznam" WHERE CAST("EvČíslo" AS INTEGER)=943"#,
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+        assert_ne!(
+            connection
+                .query_row(
+                    r#"SELECT "RodnéČíslo" FROM "Seznam" WHERE rowid=?1"#,
+                    [new_row],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            historical_943.2
+        );
         assert!(connection.query_row(r#"SELECT "Pdf" FROM "Prihlasky" WHERE "Id"=?1"#,[result.application_id],|row|row.get::<_,Vec<u8>>(0)).unwrap().starts_with(b"%PDF"));
         drop(connection);
         let duplicate=applications::ApplicationInput{first_name:"Druhý".into(),last_name:"Člen943".into(),personal_id:"991231/9431".into(),address:"Testovací 2".into(),city:"Praha".into(),postal_code:"110 00".into(),email:None,category:"B".into(),loss:false,annual_amount:200_000,affiliation:"FVČ".into(),organization:"TEST".into(),code:"1".into(),registration_number:943};
