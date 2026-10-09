@@ -74,7 +74,7 @@ for (const contract of ["zoom: var(--ui-scale)", "overflow-y: auto", ".font-size
 if (app.includes('"export_blank_application"') || backend.includes("fn export_blank_application(")) {
   missing.push("legacy blank-application Save dialog flow is still present");
 }
-if (packageJson.version !== "0.25.1") missing.push("package version 0.25.1");
+if (packageJson.version !== "0.25.2") missing.push("package version 0.25.2");
 
 if (missing.length) {
   console.error(`UI smoke contract is incomplete:\n- ${missing.join("\n- ")}`);
