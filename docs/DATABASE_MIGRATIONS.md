@@ -3,7 +3,7 @@
 ## Vlastník schématu
 
 Jediným vlastníkem změn základního databázového schématu je `src-tauri/src/migrations.rs`.
-Aktuální podporovaná verze je `DB_SCHEMA_VERSION = 1` a je uložena v
+Aktuální podporovaná verze je `DB_SCHEMA_VERSION = 2` a je uložena v
 `PRAGMA user_version`. Migrační manager se spustí v Tauri `setup` před tím, než
 frontend zpřístupní přihlášení a běžné moduly.
 

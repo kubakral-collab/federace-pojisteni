@@ -219,7 +219,8 @@ pub fn record_audit(
     output: &str,
 ) -> Result<(), String> {
     #[cfg(test)]
-    connection.execute_batch(
+    connection
+        .execute_batch(
             r#"CREATE TABLE IF NOT EXISTS "AuditLog" (
             "Id" INTEGER PRIMARY KEY AUTOINCREMENT,
             "DatumČas" TEXT NOT NULL,
@@ -228,7 +229,8 @@ pub fn record_audit(
             "IdentifikátorPojištěnce" TEXT,
             "Výsledek" TEXT NOT NULL
         );"#,
-        ).unwrap();
+        )
+        .unwrap();
     connection
         .execute(
             r#"INSERT INTO "AuditLog"

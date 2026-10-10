@@ -89,6 +89,11 @@ button {
   background: #f2f5f9;
 }
 
+/* The member profile is hosted in its own native window; keep the full existing
+   profile UI, but omit the main-window navigation chrome there. */
+.application-shell:has(.member-profile-page) .sidebar { display: none; }
+.application-shell:has(.member-profile-page) { grid-template-columns: minmax(0, 1fr); }
+
 .sidebar {
   position: sticky;
   top: 0;

@@ -249,11 +249,22 @@ fn validate_required(snapshot: &Snapshot) -> Result<(), String> {
     if snapshot.premium <= 0 {
         return Err("Doklad nelze vystavit: chybí roční pojistné.".into());
     }
-    if snapshot.registration.trim().parse::<i64>().ok().filter(|value| *value > 0).is_none() {
+    if snapshot
+        .registration
+        .trim()
+        .parse::<i64>()
+        .ok()
+        .filter(|value| *value > 0)
+        .is_none()
+    {
         return Err("Doklad nelze vystavit: evidenční číslo není platné kladné číslo.".into());
     }
-    if !snapshot.insurance_from.starts_with(&format!("{TEMPLATE_YEAR}-"))
-        || !snapshot.insurance_to.starts_with(&format!("{TEMPLATE_YEAR}-"))
+    if !snapshot
+        .insurance_from
+        .starts_with(&format!("{TEMPLATE_YEAR}-"))
+        || !snapshot
+            .insurance_to
+            .starts_with(&format!("{TEMPLATE_YEAR}-"))
     {
         return Err(format!(
             "Doklad nelze vystavit: dodaná šablona je určena pouze pro pojistný rok {TEMPLATE_YEAR}."
@@ -347,15 +358,17 @@ fn insurance_category(snapshot: &Snapshot) -> String {
 }
 
 fn registration_number(snapshot: &Snapshot) -> Result<String, String> {
-    let registration = snapshot
-        .registration
-        .trim()
-        .parse::<i64>()
-        .map_err(|_| "Doklad nelze vystavit: evidenční číslo není platné kladné číslo.".to_string())?;
+    let registration = snapshot.registration.trim().parse::<i64>().map_err(|_| {
+        "Doklad nelze vystavit: evidenční číslo není platné kladné číslo.".to_string()
+    })?;
     if registration <= 0 {
         return Err("Doklad nelze vystavit: evidenční číslo není platné kladné číslo.".into());
     }
-    Ok(format!("{}{:04}", snapshot.organization_code.trim(), registration))
+    Ok(format!(
+        "{}{:04}",
+        snapshot.organization_code.trim(),
+        registration
+    ))
 }
 
 fn create_pdf(snapshot: &Snapshot, issued_on: &str, path: &Path) -> Result<Vec<u8>, String> {
@@ -400,9 +413,9 @@ fn create_pdf(snapshot: &Snapshot, issued_on: &str, path: &Path) -> Result<Vec<u
     white_box(&layer, 12.3, 50.0, 182.2, 43.5);
     layer.set_fill_color(Color::Rgb(Rgb::new(0.18, 0.46, 0.55, None)));
     let name = format!("{} {}", snapshot.last_name, snapshot.first_name)
-    .split_whitespace()
-    .collect::<Vec<_>>()
-    .join(" ");
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     let address = format!(
         "{}; {}; {}",
         snapshot.city, snapshot.address, snapshot.postal_code
@@ -565,7 +578,97 @@ pub fn create_if_eligible(
 }
 
 pub fn pdf(connection: &Connection, id: i64) -> Result<(String, Vec<u8>), String> {
-    connection.query_row(r#"SELECT printf('Doklad_%d_%s.pdf',"PojistnyRok",replace("EvidencniCislo",' ','')),"Pdf" FROM "DokladyOUhrade" WHERE "Id"=?1"#,[id],|row|Ok((row.get(0)?,row.get(1)?))).map_err(|_|"Doklad se nepodařilo načíst.".to_string())
+    let (year, first_name, last_name, stored_name, bytes): (i32, String, String, String, Vec<u8>) = connection
+        .query_row(
+            r#"SELECT receipt."PojistnyRok",COALESCE(member."Jméno",''),COALESCE(member."Příjmení",''),receipt."JmenoClena",receipt."Pdf"
+               FROM "DokladyOUhrade" receipt
+               LEFT JOIN "Seznam" member ON member.rowid=receipt."PojistnyZaznamRowId"
+               WHERE receipt."Id"=?1"#,
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        )
+        .map_err(|_| "Doklad se nepodařilo načíst.".to_string())?;
+    let person = if first_name.trim().is_empty() && last_name.trim().is_empty() {
+        safe_filename_part(&stored_name)
+    } else {
+        format!(
+            "{}_{}",
+            safe_filename_part(&first_name),
+            safe_filename_part(&last_name)
+        )
+    };
+    Ok((format!("Doklad_o_zaplaceni_{year}_{person}.pdf"), bytes))
+}
+
+pub fn safe_filename_part(value: &str) -> String {
+    let mut result = String::new();
+    for character in value.trim().chars() {
+        let replacement = match character {
+            'á' | 'ä' | 'Á' | 'Ä' => "a",
+            'č' | 'Č' => "c",
+            'ď' | 'Ď' => "d",
+            'é' | 'ě' | 'É' | 'Ě' => "e",
+            'í' | 'Í' => "i",
+            'ň' | 'Ň' => "n",
+            'ó' | 'ö' | 'Ó' | 'Ö' => "o",
+            'ř' | 'Ř' => "r",
+            'š' | 'Š' => "s",
+            'ť' | 'Ť' => "t",
+            'ú' | 'ů' | 'ü' | 'Ú' | 'Ů' | 'Ü' => "u",
+            'ý' | 'Ý' => "y",
+            'ž' | 'Ž' => "z",
+            character if character.is_ascii_alphanumeric() => {
+                result.push(character);
+                continue;
+            }
+            _ => "_",
+        };
+        if replacement != "_" || !result.ends_with('_') {
+            result.push_str(replacement);
+        }
+    }
+    let result = result
+        .trim_matches('_')
+        .chars()
+        .take(100)
+        .collect::<String>();
+    if result.is_empty() {
+        return "Nezadano".into();
+    }
+    let stem = result
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    if matches!(
+        stem.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    ) {
+        format!("_{result}")
+    } else {
+        result
+    }
 }
 
 pub fn merge_pdf_documents(documents: Vec<Vec<u8>>) -> Result<Vec<u8>, String> {
@@ -613,15 +716,17 @@ pub fn merge_pdf_documents(documents: Vec<Vec<u8>>) -> Result<Vec<u8>, String> {
         }
     }
 
-    let (page_tree_id, page_tree_object) = page_tree
-        .ok_or_else(|| "V potvrzeních nebyl nalezen strom stránek.".to_string())?;
+    let (page_tree_id, page_tree_object) =
+        page_tree.ok_or_else(|| "V potvrzeních nebyl nalezen strom stránek.".to_string())?;
     for (object_id, object) in &pages {
         let mut dictionary = object
             .as_dict()
             .map_err(|_| "Stránka potvrzení má neplatnou strukturu.".to_string())?
             .clone();
         dictionary.set("Parent", page_tree_id);
-        output.objects.insert(*object_id, LoObject::Dictionary(dictionary));
+        output
+            .objects
+            .insert(*object_id, LoObject::Dictionary(dictionary));
     }
     let mut page_tree_dictionary = page_tree_object
         .as_dict()
@@ -755,11 +860,30 @@ mod tests {
     }
 
     #[test]
+    fn filenames_are_windows_safe_and_use_member_identity() {
+        assert_eq!(
+            safe_filename_part(" Bohumín / střed: A* "),
+            "Bohumin_stred_A"
+        );
+        assert_eq!(safe_filename_part("CON"), "_CON");
+        let (_directory, database, row_id) =
+            receipt_database(None, Some("Testovací 1"), Some("Jan"), false);
+        let connection = Connection::open(database).unwrap();
+        connection.execute(r#"INSERT INTO "DokladyOUhrade"("PojistnyZaznamRowId","IdentifikatorClena","IdPlatby","EvidencniCislo","JmenoClena","PojistnyRok","DatumUhrady","DatumVystaveni","Castka","CisloSmlouvy","Pdf","Sha256") VALUES(?1,'member-1',1,'53','Ing. Jan Novák',2026,'2026-01-01','2026-01-01',781,'650',X'25504446','hash')"#,[row_id]).unwrap();
+        let (name, bytes) = pdf(&connection, connection.last_insert_rowid()).unwrap();
+        assert_eq!(name, "Doklad_o_zaplaceni_2026_Jan_Novak.pdf");
+        assert_eq!(bytes, b"%PDF");
+    }
+
+    #[test]
     fn invalid_registration_is_not_replaced_with_a_fictitious_zero() {
         let (_directory, database, row_id) = receipt_database(None, None, Some("Jan"), false);
         let connection = Connection::open(database).unwrap();
         connection
-            .execute(r#"UPDATE "Seznam" SET "EvČíslo"='neplatné' WHERE rowid=?1"#, [row_id])
+            .execute(
+                r#"UPDATE "Seznam" SET "EvČíslo"='neplatné' WHERE rowid=?1"#,
+                [row_id],
+            )
             .unwrap();
         assert_eq!(
             load_basis(&connection, row_id, 2026).unwrap_err(),
@@ -1090,12 +1214,8 @@ mod tests {
 
     #[test]
     fn numeric_legacy_identifier_loads_for_registration_394() {
-        let (_directory, database, row_id) = receipt_database(
-            None,
-            Some("Otakara Jeremiáše 6010"),
-            Some("René"),
-            false,
-        );
+        let (_directory, database, row_id) =
+            receipt_database(None, Some("Otakara Jeremiáše 6010"), Some("René"), false);
         let connection = Connection::open(database).unwrap();
         connection.execute(r#"UPDATE "Seznam" SET "Identifikátor"=16831,"Příjmení"='Krkoška',"EvČíslo"=394,"RočPojistné"=600000,"PojistnáČástka"=1502,"SkutÚhrada"=1502 WHERE rowid=?1"#,[row_id]).unwrap();
         let basis = load_basis(&connection, row_id, 2026).unwrap();
@@ -1107,12 +1227,8 @@ mod tests {
 
     #[test]
     fn legacy_stored_payment_creates_one_linked_receipt_without_changing_total() {
-        let (_directory, database, row_id) = receipt_database(
-            None,
-            Some("Otakara Jeremiáše 6010"),
-            Some("René"),
-            false,
-        );
+        let (_directory, database, row_id) =
+            receipt_database(None, Some("Otakara Jeremiáše 6010"), Some("René"), false);
         let connection = Connection::open(&database).unwrap();
         connection.execute(r#"UPDATE "Seznam" SET "Identifikátor"=16831,"Příjmení"='Krkoška',"EvČíslo"=394,"RočPojistné"=600000,"PojistnáČástka"=1502,"SkutÚhrada"=1502 WHERE rowid=?1"#,[row_id]).unwrap();
         drop(connection);
@@ -1131,7 +1247,10 @@ mod tests {
             [row_id],
             |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?)),
         ).unwrap();
-        assert_eq!((receipts, payments, paid, receipt_amount), (1, 1, 1502, 1502));
+        assert_eq!(
+            (receipts, payments, paid, receipt_amount),
+            (1, 1, 1502, 1502)
+        );
         assert!(payment_id > 0);
     }
 }

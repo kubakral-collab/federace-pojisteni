@@ -1,5 +1,7 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import {
@@ -102,6 +104,7 @@ type Member = {
   organization?: string;
   email?: string;
   phone?: string;
+  insuranceTerminated?: boolean;
 };
 
 type MemberPage = {
@@ -156,6 +159,7 @@ type ApplicationOptions = { organizations:OrganizationCodeOption[]; annualAmount
 type ApplicationResult = { applicationId:number; identifier:number; registrationNumber:number; applicationDate:string; insuranceFrom:string; premium:number; pdfPath:string };
 type RegistrationNumberOptions = { nextNumber:number; freeNumbers:number[] };
 type RegistrationNumberMode = "next"|"free";
+type UnsavedLeaveRequest = { save: () => Promise<boolean>; leave: () => void };
 
 type LegacyTablePage = {
   source: string;
@@ -194,7 +198,7 @@ type PaymentSettings = {
 type EmailSettings = { server: string; port: number; username: string; senderEmail: string; encryption: string; credentialName: string; passwordConfigured: boolean; password?: string };
 type ReceiptSettings = { automaticCreation: boolean; automaticSending: boolean; emailSubject: string; emailBody: string; policyholder: string; contractNumber: string };
 type PaymentDocumentBasis = { memberRowId: number; memberName: string; registrationNumber: string; organizationCode: string; insuranceYear: number; prescribedPremium: number; paidAmount: number; paymentDates: string[]; contractNumber: string; insuranceStatus: string; lossInsurance: boolean; certificateReady: boolean };
-type BatchCertificateFilter = { paidFrom: string; organizationCode: string; organization: string };
+type BatchCertificateFilter = { insuranceYear?: number; paidFrom: string; organizationCode: string; organization: string };
 type BatchCertificateResult = { selected: number; created: number; existing: number; skipped: number; errors: string[]; receiptIds: number[] };
 type OperationalReportFilter = { kind: string; year: number; organizationCode: string; organization: string; dateFrom: string; dateTo: string; search:string };
 type OperationalReport = { title: string; columns: string[]; rows: string[][]; totalRows: number };
@@ -350,6 +354,7 @@ type MemberUpdate = {
   note: string;
   actualPayment: number | null;
   actualTermination: string;
+  insuranceTerminated: boolean;
 };
 
 type InsuredForm = {
@@ -389,8 +394,10 @@ const emptyFilters: MemberFilters = {
 const preview = import.meta.env.DEV
   ? new URLSearchParams(window.location.search).get("preview")
   : null;
+const memberDetailRowId = Number(new URLSearchParams(window.location.search).get("memberDetail")) || null;
 
 function initialScreen(): Screen {
+  if (memberDetailRowId) return "Seznam";
   if (preview === "prehled") return "Přehled";
   if (preview === "seznam") return "Seznam";
   if (preview === "archiv") return "Archiv";
@@ -633,7 +640,8 @@ function InsuranceSection({ member }: { member: Member }) {
       ["Pojistný rok", insuranceYear(member)],
       ["Pojištění od", displayDate(member.insuranceFrom)],
       ["Pojištění do", displayDate(member.insuranceTo)],
-      ["Skutečné ukončení", displayDate(member.actualTermination)],
+      ["Datum ukončení pojištění", displayDate(member.actualTermination)],
+      ["Pojištění ukončeno", member.insuranceTerminated ? "Ano" : "Ne"],
       ["Pojistná částka", displayCurrency(member.annualPremium)],
       ["Roční pojistné", displayCurrency(member.premium)],
       ["Skutečně uhrazeno", displayCurrency(member.actualPayment)],
@@ -660,7 +668,8 @@ function OverviewSection({ member }: { member: Member }) {
     ["Základní organizace", display(member.organization)],
     ["Kategorie", display(member.category)],
     ["Pojištění od", displayDate(member.insuranceFrom)],
-    ["Ukončení pojištění", displayDate(member.actualTermination)],
+    ["Datum ukončení pojištění", displayDate(member.actualTermination)],
+    ["Pojištění ukončeno", member.insuranceTerminated ? "Ano" : "Ne"],
     ["Roční pojistné", displayCurrency(member.premium)],
     ["Skutečně uhrazeno", displayCurrency(member.actualPayment)],
     ["Zbývá uhradit", displayCurrency(Math.max(Number(member.premium ?? 0) - Number(member.actualPayment ?? 0), 0))],
@@ -798,7 +807,6 @@ function Shell({ active, user, onNavigate, onLogout, updater, backupBusy, onCrea
     { screen: "Import členů", label: "Import členů", icon: <Upload /> },
     { screen: "Diagnostika", label: "Diagnostika", icon: <Settings /> },
     { screen: "Archiv", label: "Archiv", icon: <Archive /> },
-    { screen: "Historická data", label: "Historická data", icon: <Database /> },
     { screen: "Nastavení", label: "Nastavení", icon: <Settings /> },
     { screen: "Správa záloh", label: "Správa záloh", icon: <FolderArchive /> },
     { screen: "O programu", label: "O programu", icon: <Info /> },
@@ -884,6 +892,11 @@ function RegistrationNumberPicker({options,mode,value,onChange}:{options:Registr
   </fieldset>;
 }
 
+function UnsavedChangesDialog({ request, busy, close }: { request: UnsavedLeaveRequest | null; busy: boolean; close: () => void }) {
+  if (!request) return null;
+  return <div className="update-dialog-backdrop" role="presentation"><section className="update-dialog" role="dialog" aria-modal="true" aria-labelledby="unsaved-global-title"><small>Ochrana rozpracovaných dat</small><h2 id="unsaved-global-title">MÁTE NEULOŽENÉ ZMĚNY</h2><p>Provedli jste změny, které ještě nejsou uložené. Co chcete udělat?</p><footer className="form-actions"><button onClick={close}>Zůstat a pokračovat</button><button className="primary" disabled={busy} onClick={async () => { if(await request.save()){close();request.leave();} }}>Uložit a odejít</button><button className="danger" disabled={busy} onClick={() => { close();request.leave(); }}>Odejít bez uložení</button></footer></section></div>;
+}
+
 export default function App() {
   const [screen, setScreen] = useState<Screen>(initialScreen);
   const [password, setPassword] = useState("");
@@ -892,12 +905,14 @@ export default function App() {
   const [user, setUser] = useState(preview ? "náhled" : "");
   const [role, setRole] = useState(preview ? "Správce" : "");
   const [form, setForm] = useState<InsuredForm>(() => emptyForm(0));
+  const [formBaseline, setFormBaseline] = useState<InsuredForm | null>(null);
   const [applicationForm,setApplicationForm]=useState<ApplicationForm>(emptyApplication);
+  const [applicationFormBaseline,setApplicationFormBaseline]=useState<ApplicationForm|null>(null);
   const [applicationOptions,setApplicationOptions]=useState<ApplicationOptions>({organizations:[],annualAmounts:[]});
   const [registrationOptions,setRegistrationOptions]=useState<RegistrationNumberOptions>({nextNumber:0,freeNumbers:[]});
   const [registrationMode,setRegistrationMode]=useState<RegistrationNumberMode>("next");
   const [registrationNumber,setRegistrationNumber]=useState(0);
-  const [startupStatus,setStartupStatus]=useState<StartupStatus|null>(preview ? {ready:true,applicationVersion:"preview",databaseSchemaVersion:1,supportedSchemaVersion:1,smokeMode:false}:null);
+  const [startupStatus,setStartupStatus]=useState<StartupStatus|null>(preview ? {ready:true,applicationVersion:"preview",databaseSchemaVersion:2,supportedSchemaVersion:2,smokeMode:false}:null);
   const [applicationStep,setApplicationStep]=useState<1|2|3>(1);
   const [applicationTariff,setApplicationTariff]=useState<TariffResult>({premium:0,months:12,insuredAmount:0});
   const [applicationResult,setApplicationResult]=useState<ApplicationResult|null>(null);
@@ -933,6 +948,8 @@ export default function App() {
   >("overview");
   const [editingMember, setEditingMember] = useState(false);
   const [memberEdit, setMemberEdit] = useState<MemberUpdate | null>(null);
+  const [memberEditBaseline, setMemberEditBaseline] = useState<MemberUpdate | null>(null);
+  const [unsavedLeave, setUnsavedLeave] = useState<UnsavedLeaveRequest | null>(null);
   const [archiveYears, setArchiveYears] = useState<ArchiveYear[]>([]);
   const [archiveYear, setArchiveYear] = useState<number | null>(null);
   const [archivePage, setArchivePage] = useState<MemberPage>({
@@ -996,6 +1013,7 @@ export default function App() {
   const [organizationPaymentForm,setOrganizationPaymentForm]=useState({organization:"",year:new Date().getFullYear(),receivedOn:new Date().toISOString().slice(0,10),receivedAmount:"",note:"",selected:{} as Record<number,boolean>,amounts:{} as Record<number,string>});
   const [claimsLoading, setClaimsLoading] = useState(false);
   const [claimForm, setClaimForm] = useState<ClaimForm | null>(null);
+  const [claimFormBaseline, setClaimFormBaseline] = useState<ClaimForm | null>(null);
   const [claimInsuranceMember,setClaimInsuranceMember]=useState<Member|null>(null);
   const [createdClaimId, setCreatedClaimId] = useState<number | null>(null);
   const [editingClaimId, setEditingClaimId] = useState<number | null>(null);
@@ -1005,7 +1023,7 @@ export default function App() {
   const [claimYearFilter, setClaimYearFilter] = useState("");
   const [claimStatusFilter, setClaimStatusFilter] = useState("");
   const [claimOcFilter, setClaimOcFilter] = useState("");
-  const [insurerSelection, setInsurerSelection] = useState("new");
+  const [insurerFromDate, setInsurerFromDate] = useState("");
   const [insurerOverview, setInsurerOverview] = useState<InsurerOverview | null>(null);
   const [insurerLoading, setInsurerLoading] = useState(false);
   const [reportFilter, setReportFilter] = useState<OperationalReportFilter>({ kind: "insurer", year: new Date().getFullYear(), organizationCode: "", organization: "", dateFrom: "", dateTo: "",search:"" });
@@ -1024,7 +1042,7 @@ export default function App() {
           lastRegistrationNumber: 151,
           databaseDate: "26.07.2026",
           programVersion: "0.11.0",
-          databaseSchemaVersion: 1,
+          databaseSchemaVersion: 2,
           activeInsuranceYear: 2026,
           commitSha: "preview",
           buildDate: "2026-07-28T00:00:00Z",
@@ -1035,10 +1053,14 @@ export default function App() {
         }
       : null,
   );
+  const [workingYears, setWorkingYears] = useState<number[]>([]);
+  const [workingYear, setWorkingYear] = useState<number | null>(null);
+  const [yearCreationTarget, setYearCreationTarget] = useState<number | null>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
   const titleRef = useRef<HTMLSelectElement>(null);
   const membersTableRef = useRef<HTMLDivElement>(null);
   const membersScrollPosition = useRef(0);
+  const allowDetailWindowClose = useRef(false);
   const startupUpdateCheckStarted = useRef(false);
 
   async function checkForUpdates(manual = false) {
@@ -1209,13 +1231,38 @@ export default function App() {
         setStartupStatus(startup);
         if (!startup.ready) return;
         return invoke<{ initialized: boolean }>("get_auth_status")
-          .then((status) => setAuthInitialized(status.initialized));
+          .then(async (status) => {
+            setAuthInitialized(status.initialized);
+            if (!memberDetailRowId) return;
+            const session = await invoke<{ authenticated:boolean; user:string; role:string }>("get_current_session");
+            if (!session.authenticated) throw new Error("Přihlášení již není platné.");
+            setUser(session.user); setRole(session.role); setScreen("Seznam");
+          });
       })
       .catch((message) => setError(String(message)));
   }, []);
 
   useEffect(() => {
-    if (!user || preview || !updateCheckEnabled || startupUpdateCheckStarted.current) return;
+    if (!user || preview) return;
+    invoke<number[]>("list_working_insurance_years").then((years) => {
+      setWorkingYears(years);
+      setWorkingYear((current) => current && years.includes(current) ? current : years[years.length - 1] ?? null);
+    }).catch((message) => setError(String(message)));
+  }, [user]);
+
+  useEffect(() => {
+    if (!workingYear) return;
+    setReportFilter((current)=>({...current,year:workingYear}));
+    setOrganizationPaymentForm((current)=>({...current,year:workingYear}));
+  }, [workingYear]);
+
+  useEffect(() => {
+    if (!memberDetailRowId || !user || selectedMember) return;
+    void openMember(memberDetailRowId);
+  }, [user, selectedMember]);
+
+  useEffect(() => {
+    if (!user || preview || memberDetailRowId || !updateCheckEnabled || startupUpdateCheckStarted.current) return;
     startupUpdateCheckStarted.current = true;
     void checkForUpdates();
   }, [user, updateCheckEnabled]);
@@ -1224,13 +1271,13 @@ export default function App() {
     if (screen === "Správa záloh" && !preview) void loadDatabaseBackups();
     if (screen === "Doklady o zaplacení" && !preview) {
       void loadReceipts(undefined, "");
-      void invoke<string[]>("list_certificate_organizations")
+      void invoke<string[]>("list_certificate_organizations", { insuranceYear: workingYear })
         .then(setBatchCertificateOrganizations)
         .catch((message) => setError(String(message)));
     }
     if (screen === "Pojistné události" && !preview) void loadClaimsOverview();
     if (screen === "Sestavy a exporty" && !preview) void loadLegacyReportHistory();
-  }, [screen]);
+  }, [screen, workingYear]);
 
   useEffect(() => {
     if (screen !== "Nový člen") return;
@@ -1298,10 +1345,10 @@ export default function App() {
   useEffect(() => {
     if (screen !== "Přehled" && screen !== "O programu") return;
     if (preview) return;
-    invoke<DashboardInfo>("get_dashboard")
+    invoke<DashboardInfo>("get_dashboard", { insuranceYear: workingYear })
       .then(setDashboard)
       .catch((message) => setError(String(message)));
-  }, [screen]);
+  }, [screen, workingYear]);
 
   function update<K extends keyof InsuredForm>(key: K, value: InsuredForm[K]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -1334,6 +1381,12 @@ export default function App() {
   }
 
   async function leaveToLogin() {
+    const saveDirty = memberEditDirty ? saveMemberEdit : claimFormDirty ? saveClaim : insuredFormDirty ? () => save(false) : applicationFormDirty ? completeApplication : null;
+    if (saveDirty) { setUnsavedLeave({ save: saveDirty, leave: () => void performLogout() }); return; }
+    await performLogout();
+  }
+
+  async function performLogout() {
     await invoke("logout");
     setUser("");
     setRole("");
@@ -1342,6 +1395,14 @@ export default function App() {
   }
 
   function navigate(next: Exclude<Screen, "Vstup">) {
+    if (memberDetailRowId) { closeMemberDetail(); return; }
+    if (claimFormDirty) { setUnsavedLeave({ save: saveClaim, leave: () => navigateWithoutDirtyGuard(next) }); return; }
+    if (insuredFormDirty) { setUnsavedLeave({ save: () => save(false), leave: () => navigateWithoutDirtyGuard(next) }); return; }
+    if (applicationFormDirty) { setUnsavedLeave({ save: completeApplication, leave: () => navigateWithoutDirtyGuard(next) }); return; }
+    navigateWithoutDirtyGuard(next);
+  }
+
+  function navigateWithoutDirtyGuard(next: Exclude<Screen, "Vstup">) {
     setError("");
     setNotice("");
     setSelectedMember(null);
@@ -1372,7 +1433,6 @@ export default function App() {
     }
     if (next === "Přehled pro pojišťovnu") {
       setScreen(next);
-      void loadInsurerOverview(insurerSelection);
       return;
     }
     if (next === "Faktury a dávky") { setScreen(next); void loadInvoices(); return; }
@@ -1381,12 +1441,15 @@ export default function App() {
     setScreen(next);
   }
 
-  async function loadInsurerOverview(selection: string) {
+  async function loadInsurerOverview() {
+    if (!insurerFromDate) {
+      setError("Zadejte datum, od kterého chcete pojištěnce zobrazit.");
+      return;
+    }
     setInsurerLoading(true);
     setError("");
-    setInsurerSelection(selection);
     try {
-      setInsurerOverview(await invoke<InsurerOverview>("get_insurer_overview", { selection }));
+      setInsurerOverview(await invoke<InsurerOverview>("get_insurer_overview", { fromDate: insurerFromDate }));
     } catch (message) {
       setError(String(message));
     } finally {
@@ -1404,6 +1467,7 @@ export default function App() {
         page: 1,
         pageSize: 25,
         filters: emptyFilters,
+        insuranceYear: workingYear,
       });
       setAgendaMembers(result.members);
     } catch (message) {
@@ -1446,7 +1510,9 @@ export default function App() {
     setReturnToMember(false);
     setCreatedClaimId(null);
     setEditingClaimId(null);
-    setClaimForm(emptyClaimForm(member.rowId));
+    const draft = emptyClaimForm(member.rowId);
+    setClaimForm(draft);
+    setClaimFormBaseline(draft);
     setScreen("Nová pojistná událost");
   }
 
@@ -1462,7 +1528,7 @@ export default function App() {
       setReturnToMember(false);
       setEditingClaimId(claim.id);
       setCreatedClaimId(null);
-      setClaimForm({
+      const draft: ClaimForm = {
         insuranceRowId: member.rowId,
         phone: detail.phone ?? "", employer: detail.employer ?? "", occupation: detail.occupation ?? "",
         occurredOn: detail.occurredOn ?? "", reportedOn: detail.reportedOn ?? "",
@@ -1471,7 +1537,9 @@ export default function App() {
         description: detail.description ?? "", note: detail.note ?? "",
         additionalInformation: detail.additionalInformation ?? "", closedOn: detail.closedOn ?? "",
         handledBy: detail.handledBy ?? "", reportPosition: detail.reportPosition ?? "",
-      });
+      };
+      setClaimForm(draft);
+      setClaimFormBaseline(draft);
       setClaimInsuranceMember(member);
       setScreen("Nová pojistná událost");
     } catch (message) {
@@ -1506,15 +1574,23 @@ export default function App() {
     setReturnToMember(true);
     setCreatedClaimId(null);
     setEditingClaimId(null);
-    setClaimForm(emptyClaimForm(member.rowId));
+    const draft = emptyClaimForm(member.rowId);
+    setClaimForm(draft);
+    setClaimFormBaseline(draft);
     setClaimInsuranceMember(null);
     setScreen("Nová pojistná událost");
   }
 
   function returnToMemberDetail() {
+    if (claimFormDirty) { setUnsavedLeave({ save: saveClaim, leave: finishReturnToMemberDetail }); return; }
+    finishReturnToMemberDetail();
+  }
+
+  function finishReturnToMemberDetail() {
     setScreen(returnToMember ? "Seznam" : "Pojistné události");
     setReturnToMember(false);
     setClaimForm(null);
+    setClaimFormBaseline(null);
     setPaymentDraft(null);
     setCreatedClaimId(null);
     setEditingClaimId(null);
@@ -1602,6 +1678,7 @@ export default function App() {
     setNotice("");
     try {
       const result = await invoke<BatchCertificateResult>("create_certificate_batch", { filter: {
+        insuranceYear: workingYear,
         paidFrom: optional(batchCertificateFilter.paidFrom),
         organizationCode: optional(batchCertificateFilter.organizationCode),
         organization: optional(batchCertificateFilter.organization),
@@ -1656,7 +1733,7 @@ export default function App() {
   async function loadDiagnostics(){setError("");try{setDiagnostics(await invoke<SystemDiagnostics>("get_system_diagnostics"));}catch(message){setError(String(message));}}
 
   async function loadPaymentWorkspace(){
-    const year=dashboard?.activeInsuranceYear??new Date().getFullYear();
+    const year=workingYear??dashboard?.activeInsuranceYear??new Date().getFullYear();
     setOrganizationPaymentForm(current=>({...current,year}));
     try{const [organizations,payments]=await Promise.all([invoke<OrganizationOption[]>("list_payment_organizations",{year}),invoke<OrganizationPayment[]>("list_organization_payments")]);setPaymentOrganizations(organizations);setOrganizationPayments(payments);}catch(message){setError(String(message));}
   }
@@ -1670,7 +1747,7 @@ export default function App() {
   function selectedOrganizationMembers(){return organizationMembers.filter(member=>organizationPaymentForm.selected[member.rowId]);}
   async function saveOrganizationPayment(){
     const members=selectedOrganizationMembers();setSaving(true);setError("");
-    try{await invoke("save_organization_payment",{payment:{organization:organizationPaymentForm.organization,receivedOn:organizationPaymentForm.receivedOn,insuranceYear:organizationPaymentForm.year,receivedAmount:Number(organizationPaymentForm.receivedAmount),note:optional(organizationPaymentForm.note),allocations:members.map(member=>({rowId:member.rowId,amount:Number(organizationPaymentForm.amounts[member.rowId]??0)}))}});setNotice("Organizační platba byla uložena.");setOrganizationMembers([]);setOrganizationPaymentForm(current=>({...current,organization:"",receivedAmount:"",note:"",selected:{},amounts:{}}));await loadPaymentWorkspace();setDashboard(await invoke<DashboardInfo>("get_dashboard"));}catch(message){setError(String(message));}finally{setSaving(false);}
+    try{await invoke("save_organization_payment",{payment:{organization:organizationPaymentForm.organization,receivedOn:organizationPaymentForm.receivedOn,insuranceYear:organizationPaymentForm.year,receivedAmount:Number(organizationPaymentForm.receivedAmount),note:optional(organizationPaymentForm.note),allocations:members.map(member=>({rowId:member.rowId,amount:Number(organizationPaymentForm.amounts[member.rowId]??0)}))}});setNotice("Organizační platba byla uložena.");setOrganizationMembers([]);setOrganizationPaymentForm(current=>({...current,organization:"",receivedAmount:"",note:"",selected:{},amounts:{}}));await loadPaymentWorkspace();setDashboard(await invoke<DashboardInfo>("get_dashboard",{insuranceYear:workingYear}));}catch(message){setError(String(message));}finally{setSaving(false);}
   }
   async function openOrganizationPayment(id:number){try{setOrganizationPaymentDetail(await invoke<OrganizationPaymentDetail>("get_organization_payment",{id}));}catch(message){setError(String(message));}}
 
@@ -1690,7 +1767,7 @@ export default function App() {
       await invoke("save_member_payment", { payment: { ...memberPaymentForm, amount: Number(memberPaymentForm.amount), note: optional(memberPaymentForm.note) } });
       await reloadMemberPayments(selectedMember.rowId);
       await loadReceipts(selectedMember.rowId, "");
-      setDashboard(await invoke<DashboardInfo>("get_dashboard"));
+      setDashboard(await invoke<DashboardInfo>("get_dashboard", { insuranceYear: workingYear }));
       setMemberPaymentForm(null);
       setNotice(memberPaymentForm.id ? "Platba byla upravena." : "Platba byla přidána.");
     } catch (message) {
@@ -1707,7 +1784,7 @@ export default function App() {
     try {
       await invoke("delete_member_payment", { rowId: selectedMember.rowId, paymentId: payment.id });
       await reloadMemberPayments(selectedMember.rowId);
-      setDashboard(await invoke<DashboardInfo>("get_dashboard"));
+      setDashboard(await invoke<DashboardInfo>("get_dashboard", { insuranceYear: workingYear }));
       setMemberPaymentForm(null);
       setNotice("Platba byla odstraněna.");
     } catch (message) {
@@ -1717,8 +1794,8 @@ export default function App() {
     }
   }
 
-  async function saveClaim() {
-    if (!claimForm) return;
+  async function saveClaim(): Promise<boolean> {
+    if (!claimForm) return false;
     setClaimsLoading(true);
     setError("");
     try {
@@ -1736,10 +1813,13 @@ export default function App() {
       setCreatedClaimId(id);
       setNotice(editingClaimId ? "Pojistná událost byla upravena." : "Pojistná událost byla vytvořena.");
       setEditingClaimId(null);
+      setClaimFormBaseline(claimForm);
       if (selectedMember) await loadMemberClaims(selectedMember);
       await loadClaimsOverview();
+      return true;
     } catch (message) {
       setError(String(message));
+      return false;
     } finally {
       setClaimsLoading(false);
     }
@@ -1889,21 +1969,32 @@ export default function App() {
   async function openInsured() {
     setError("");
     setNotice("");
-    const activeYear = dashboard?.activeInsuranceYear;
+    const activeYear = workingYear ?? dashboard?.activeInsuranceYear;
     if (!activeYear) {
       setError("Aktivní pojistný rok se nepodařilo načíst.");
       return;
     }
-    try{await prepareRegistrationNumber();setForm(emptyForm(activeYear));setScreen("Nový člen");}catch(message){setError(String(message));}
+    try{await prepareRegistrationNumber();const draft=emptyForm(activeYear);setForm(draft);setFormBaseline(draft);setScreen("Nový člen");}catch(message){setError(String(message));}
   }
 
-  async function printBlankApplication(){setSaving(true);setError("");try{const path=await invoke<string>("create_blank_application_for_printing");await invoke("print_generated_pdf",{path,deleteAfterPrint:true});setNotice("Prázdná přihláška byla předána systémovému tisku.");}catch(message){setError(String(message));}finally{setSaving(false)}}
-  async function printCompletedApplication(path:string){setSaving(true);setError("");try{await invoke("print_generated_pdf",{path,deleteAfterPrint:false});setNotice("Přihláška byla předána systémovému tisku.");}catch(message){setError(String(message));}finally{setSaving(false)}}
-  async function openApplication(){setError("");setNotice("");try{await prepareRegistrationNumber();setApplicationForm(emptyApplication());setApplicationStep(1);setApplicationResult(null);setScreen("Vyplnit přihlášku");}catch(message){setError(String(message));}}
-  async function completeApplication(){setSaving(true);setError("");try{const result=await invoke<ApplicationResult>("complete_application",{application:{...applicationForm,email:optional(applicationForm.email),registrationNumber}});setApplicationResult(result);setNotice(`Člen byl založen s evidenčním číslem ${result.registrationNumber}.`);await invoke("open_generated_pdf",{path:result.pdfPath,folder:false});}catch(message){setError(String(message));if(String(message).startsWith("Evidenční číslo "))await prepareRegistrationNumber();}finally{setSaving(false)}}
+  async function openApplicationPrintDialog(path:string,deleteAfterPrint:boolean){
+    const printablePath=await invoke<string>("print_generated_pdf",{path,deleteAfterPrint});
+    const label=`application-print-${Date.now()}`;
+    const printWindow=new WebviewWindow(label,{url:convertFileSrc(printablePath),title:"Tisk přihlášky",width:1000,height:800,center:true});
+    await new Promise<void>((resolve,reject)=>{
+      printWindow.once("tauri://created",()=>resolve());
+      printWindow.once("tauri://error",event=>reject(new Error(String(event.payload))));
+    });
+    await new Promise(resolve=>window.setTimeout(resolve,1000));
+    try{await invoke("show_pdf_print_dialog",{label})}catch(message){await printWindow.close();throw message}
+  }
+  async function printBlankApplication(){setSaving(true);setError("");try{const path=await invoke<string>("create_blank_application_for_printing");await openApplicationPrintDialog(path,true);setNotice("Byl otevřen systémový tiskový dialog přihlášky.");}catch(message){setError(String(message));}finally{setSaving(false)}}
+  async function printCompletedApplication(path:string){setSaving(true);setError("");try{await openApplicationPrintDialog(path,false);setNotice("Byl otevřen systémový tiskový dialog přihlášky.");}catch(message){setError(String(message));}finally{setSaving(false)}}
+  async function openApplication(){setError("");setNotice("");try{await prepareRegistrationNumber();const draft=emptyApplication();setApplicationForm(draft);setApplicationFormBaseline(draft);setApplicationStep(1);setApplicationResult(null);setScreen("Vyplnit přihlášku");}catch(message){setError(String(message));}}
+  async function completeApplication():Promise<boolean>{setSaving(true);setError("");try{const result=await invoke<ApplicationResult>("complete_application",{application:{...applicationForm,email:optional(applicationForm.email),registrationNumber}});setApplicationResult(result);setApplicationFormBaseline(applicationForm);setNotice(`Člen byl založen s evidenčním číslem ${result.registrationNumber}.`);await invoke("open_generated_pdf",{path:result.pdfPath,folder:false});return true;}catch(message){setError(String(message));if(String(message).startsWith("Evidenční číslo "))await prepareRegistrationNumber();return false;}finally{setSaving(false)}}
   async function saveApplicationSnapshot(applicationId:number){setSaving(true);setError("");try{const path=await invoke<string|null>("export_application_snapshot",{id:applicationId});if(path)setNotice(`Neměnná přihláška byla uložena: ${path}`);}catch(message){setError(String(message));}finally{setSaving(false)}}
 
-  async function loadMembers(page = 1, search = activeSearch, filters = memberFilters) {
+  async function loadMembers(page = 1, search = activeSearch, filters = memberFilters, year = workingYear) {
     setMembersLoading(true);
     setError("");
     try {
@@ -1912,6 +2003,7 @@ export default function App() {
         page,
         pageSize: 50,
         filters,
+        insuranceYear: year,
       });
       setMemberPage(result);
     } catch (message) {
@@ -1952,6 +2044,22 @@ export default function App() {
   async function openMember(rowId: number) {
     setError("");
     membersScrollPosition.current = membersTableRef.current?.scrollTop ?? 0;
+    if (!memberDetailRowId) {
+      const label = `member-detail-${rowId}`;
+      const existing = await WebviewWindow.getByLabel(label);
+      if (existing) { await existing.setFocus(); return; }
+      const detail = new WebviewWindow(label, {
+        url: `/?memberDetail=${rowId}`,
+        title: "Detail pojištěnce",
+        width: 1100,
+        height: 820,
+        minWidth: 900,
+        minHeight: 650,
+        center: true,
+      });
+      detail.once("tauri://error", (event) => setError(`Detail člena se nepodařilo otevřít: ${String(event.payload)}`));
+      return;
+    }
     try {
       const [member, history, auditHistory, payments] = await Promise.all([
         invoke<Member>("get_current_member", { rowId }),
@@ -1988,7 +2096,13 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [screen, selectedMember, editingMember, memberEdit]);
 
-  function closeMemberDetail() {
+  const memberEditDirty = Boolean(editingMember && memberEdit && memberEditBaseline && JSON.stringify(memberEdit) !== JSON.stringify(memberEditBaseline));
+  const claimFormDirty = Boolean(claimForm && claimFormBaseline && JSON.stringify(claimForm) !== JSON.stringify(claimFormBaseline));
+  const insuredFormDirty = Boolean(screen==="Nový člen" && formBaseline && JSON.stringify(form) !== JSON.stringify(formBaseline));
+  const applicationFormDirty = Boolean(screen==="Vyplnit přihlášku" && !applicationResult && applicationFormBaseline && JSON.stringify(applicationForm) !== JSON.stringify(applicationFormBaseline));
+
+  function leaveMemberDetail() {
+      if (memberDetailRowId) { allowDetailWindowClose.current = true; void getCurrentWindow().destroy(); return; }
       setSelectedMember(null);
       setHistoryMember(null);
       setEditingMember(false);
@@ -1999,8 +2113,46 @@ export default function App() {
     });
   }
 
+  async function prepareNextInsuranceYear() {
+    setSaving(true); setError("");
+    try {
+      const year = await invoke<number>("prepare_next_insurance_year");
+      const years = await invoke<number[]>("list_working_insurance_years");
+      setWorkingYears(years); setWorkingYear(year);
+      setNotice(`Pojistný rok ${year} byl připraven. Předchozí rok zůstává otevřený.`);
+      setYearCreationTarget(null);
+      setDashboard(await invoke<DashboardInfo>("get_dashboard", { insuranceYear: year }));
+    } catch (message) { setError(String(message)); }
+    finally { setSaving(false); }
+  }
+
+  useEffect(() => {
+    if (!memberDetailRowId || !isTauri()) return;
+    let unlisten: (() => void) | undefined;
+    getCurrentWindow().onCloseRequested((event) => {
+      if (allowDetailWindowClose.current || !memberEditDirty) return;
+      event.preventDefault();
+      setUnsavedLeave({ save: saveMemberEdit, leave: leaveMemberDetail });
+    }).then((dispose) => { unlisten = dispose; });
+    return () => unlisten?.();
+  }, [memberEditDirty, memberEdit]);
+
+  function closeMemberDetail() {
+    if (memberEditDirty) {
+      setUnsavedLeave({ save: saveMemberEdit, leave: leaveMemberDetail });
+      return;
+    }
+    leaveMemberDetail();
+  }
+
+  function cancelMemberEdit() {
+    const discard = () => { setEditingMember(false); setMemberEdit(null); setMemberEditBaseline(null); };
+    if (memberEditDirty) { setUnsavedLeave({ save: saveMemberEdit, leave: discard }); return; }
+    discard();
+  }
+
   function startMemberEdit(member: Member) {
-    setMemberEdit({
+    const draft: MemberUpdate = {
       rowId: member.rowId,
       title: member.title ?? "",
       lastName: member.lastName ?? "",
@@ -2019,7 +2171,10 @@ export default function App() {
       note: member.note ?? "",
       actualPayment: member.actualPayment ? Number(member.actualPayment) : 0,
       actualTermination: member.actualTermination?.slice(0, 10) ?? "",
-    });
+      insuranceTerminated: member.insuranceTerminated ?? false,
+    };
+    setMemberEdit(draft);
+    setMemberEditBaseline(draft);
     setEditingMember(true);
   }
 
@@ -2037,8 +2192,8 @@ export default function App() {
     finally { setSaving(false); }
   }
 
-  async function saveMemberEdit() {
-    if (!memberEdit) return;
+  async function saveMemberEdit(): Promise<boolean> {
+    if (!memberEdit) return false;
     setSaving(true);
     setError("");
     try {
@@ -2052,9 +2207,12 @@ export default function App() {
       setMemberHistory(await invoke<Member[]>("get_member_history", { rowId: updated.rowId }));
       setEditingMember(false);
       setMemberEdit(null);
+      setMemberEditBaseline(null);
       setNotice("Údaje člena byly uloženy.");
+      return true;
     } catch (message) {
       setError(String(message));
+      return false;
     } finally {
       setSaving(false);
     }
@@ -2144,10 +2302,24 @@ export default function App() {
     }
   }
 
+  async function openArchivedMemberClaims(member: Member) {
+    setError("");
+    setAgendaSearch(member.insured);
+    setClaimYearFilter(String(archiveYear ?? insuranceYear(member)));
+    setScreen("Pojistné události");
+    await loadClaimsOverview();
+  }
+
   function cancelInsured() {
+    if (insuredFormDirty) { setUnsavedLeave({ save: () => save(false), leave: finishCancelInsured }); return; }
+    finishCancelInsured();
+  }
+
+  function finishCancelInsured() {
     setError("");
     setNotice("");
-    setForm(emptyForm(dashboard?.activeInsuranceYear ?? 0));
+    setForm(emptyForm(workingYear ?? dashboard?.activeInsuranceYear ?? 0));
+    setFormBaseline(null);
     setScreen("Přehled");
   }
 
@@ -2157,7 +2329,7 @@ export default function App() {
     );
   }
 
-  async function save(closeAfterSave: boolean) {
+  async function save(closeAfterSave: boolean): Promise<boolean> {
     setError("");
     setNotice("");
     setSaving(true);
@@ -2186,15 +2358,17 @@ export default function App() {
         },
       );
       setNotice(`Záznam byl uložen. Evidenční číslo: ${result.registrationNumber}.`);
+      setFormBaseline(form);
       if (closeAfterSave) {
-        setForm(emptyForm(dashboard?.activeInsuranceYear ?? 0));
+        setForm(emptyForm(workingYear ?? dashboard?.activeInsuranceYear ?? 0));
+        setFormBaseline(null);
         setScreen("Přehled");
       } else {
-        const activeYear = dashboard?.activeInsuranceYear;
+        const activeYear = workingYear ?? dashboard?.activeInsuranceYear;
         if (!activeYear) {
           throw new Error("Aktivní pojistný rok se nepodařilo načíst.");
         }
-        setForm(emptyForm(activeYear));
+        const draft=emptyForm(activeYear);setForm(draft);setFormBaseline(draft);
         const refreshed = await invoke<FormOptions>("get_form_options", {
           affiliation: "FVČ",
           year: activeYear,
@@ -2203,9 +2377,11 @@ export default function App() {
         await prepareRegistrationNumber();
         titleRef.current?.focus();
       }
+      return true;
     } catch (message) {
       setError(String(message));
       if(String(message).startsWith("Evidenční číslo ")) await prepareRegistrationNumber();
+      return false;
     } finally {
       setSaving(false);
     }
@@ -2296,8 +2472,10 @@ export default function App() {
           </header>
           {error && <div className="message error">{error}</div>}
           {notice && <div className="message success">{notice}</div>}
+          <section className="agenda-workspace"><header className="member-payments-header"><div><small>Kontext celé aplikace</small><h2>Aktivní pojistný rok</h2></div>{role==="Správce"&&<button className="primary" disabled={saving || workingYears.length===0} onClick={()=>setYearCreationTarget((workingYears[workingYears.length-1] ?? dashboard?.activeInsuranceYear ?? new Date().getFullYear())+1)}>Založit nový pojistný rok</button>}</header><label>Aktivní pojistný rok<select value={workingYear ?? ""} onChange={(event)=>setWorkingYear(Number(event.target.value))}>{workingYears.map(year=><option key={year} value={year}>{year}</option>)}</select></label><p>Zvolený rok zůstává kontextem při přechodu mezi moduly. Přepnutí samo nemění ani nepřevádí data.</p></section>
+          {yearCreationTarget&&<div className="update-dialog-backdrop" role="presentation"><section className="update-dialog" role="dialog" aria-modal="true" aria-labelledby="new-year-title"><small>Hromadná databázová operace</small><h2 id="new-year-title">Založit pojistný rok {yearCreationTarget}?</h2><p>Odpovídající pojištěnci budou převedeni z roku {yearCreationTarget-1}. Původní rok, jeho platby a historické záznamy zůstanou zachované. Před převodem vznikne ověřená záloha.</p><footer className="form-actions"><button disabled={saving} onClick={()=>setYearCreationTarget(null)}>Zrušit</button><button className="primary" disabled={saving} onClick={()=>void prepareNextInsuranceYear()}>Založit pojistný rok</button></footer></section></div>}
           <section className="dashboard-grid">
-            <article><Archive /><small>Aktivní pojistný rok</small><strong>{dashboard?.activeInsuranceYear ?? "—"}</strong></article>
+            <article><Archive /><small>Aktivní pojistný rok</small><strong>{workingYear ?? dashboard?.activeInsuranceYear ?? "—"}</strong></article>
             <article><Users /><small>Počet pojištěnců</small><strong>{dashboard ? new Intl.NumberFormat("cs-CZ").format(dashboard.memberCount) : "—"}</strong></article>
             <article><Save /><small>Poslední evidenční číslo</small><strong>{dashboard?.lastRegistrationNumber ?? "—"}</strong></article>
             <article><Database /><small>Datum databáze</small><strong>{displayDate(dashboard?.databaseDate)}</strong></article>
@@ -2410,19 +2588,14 @@ export default function App() {
           </header>
           {error && <div className="message error">{error}</div>}
           <section className="overview-controls">
-            <label>Výběr přehledu
-              <select value={insurerSelection} disabled={insurerLoading} onChange={(event) => void loadInsurerOverview(event.target.value)}>
-                <option value="new">Nově pojištění v aktuálním roce</option>
-                <option value="terminated">Ukončení v aktuálním roce</option>
-                <option value="underpaid">Neuhrazené nebo nedoplacené pojistné</option>
-                <option value="oc1">Aktivní členové OC 1</option>
-                <option value="oc2">Aktivní členové OC 2</option>
-              </select>
+            <label>Pojištěnci od data:
+              <input type="date" value={insurerFromDate} disabled={insurerLoading} onChange={(event) => setInsurerFromDate(event.target.value)} />
             </label>
+            <button className="primary" disabled={insurerLoading || !insurerFromDate} onClick={() => void loadInsurerOverview()}>Zobrazit přehled</button>
           </section>
           {insurerOverview && <>
             <section className="stats-grid compact-stats">
-              <article><span>Pojistný rok</span><strong>{insurerOverview.insuranceYear}</strong></article>
+              <article><span>Pojištění od data</span><strong>{displayDate(insurerFromDate)}</strong></article>
               <article><span>Počet záznamů</span><strong>{insurerOverview.members.length}</strong></article>
               <article><span>Předepsané pojistné</span><strong>{displayCurrency(insurerOverview.totalPremium)}</strong></article>
               <article><span>Skutečně uhrazeno</span><strong>{displayCurrency(insurerOverview.totalPaid)}</strong></article>
@@ -2485,6 +2658,7 @@ export default function App() {
       setClaimForm((current) => current ? { ...current, [key]: value } : current);
     return (
       <Shell {...shellUpdater} active={returnToMember ? "Seznam" : "Pojistné události"} user={user} onNavigate={navigate} onLogout={leaveToLogin}>
+        {unsavedLeave && <div className="update-dialog-backdrop" role="presentation"><section className="update-dialog" role="dialog" aria-modal="true" aria-labelledby="unsaved-claim-title"><small>Ochrana rozpracovaných dat</small><h2 id="unsaved-claim-title">MÁTE NEULOŽENÉ ZMĚNY</h2><p>Provedli jste změny, které ještě nejsou uložené. Co chcete udělat?</p><footer className="form-actions"><button onClick={() => setUnsavedLeave(null)}>Zůstat a pokračovat</button><button className="primary" disabled={claimsLoading} onClick={async () => { const request=unsavedLeave;if(await request.save()){setUnsavedLeave(null);request.leave();} }}>Uložit a odejít</button><button className="danger" disabled={claimsLoading} onClick={() => { const request=unsavedLeave;setUnsavedLeave(null);request.leave(); }}>Odejít bez uložení</button></footer></section></div>}
         <div className="page claim-page">
           <header className="page-header">
             <div><small>Pojistné události</small><h1>Nová pojistná událost</h1></div>
@@ -2497,7 +2671,7 @@ export default function App() {
               <h2>Pojistná událost byla uložena.</h2>
               <p>Číslo pojistné události: <strong>{createdClaimId}</strong></p>
               <div className="form-actions">
-                <button className="action-claim" onClick={() => { setCreatedClaimId(null); setClaimForm(emptyClaimForm(selectedMember.rowId)); }}>Založit další událost</button>
+                <button className="action-claim" onClick={() => { const draft=emptyClaimForm(selectedMember.rowId);setCreatedClaimId(null);setClaimForm(draft);setClaimFormBaseline(draft); }}>Založit další událost</button>
                 <button className="action-neutral" onClick={returnToMemberDetail}><ArrowLeft /> {returnToMember ? "Zpět na detail člena" : "Zpět na pojistné události"}</button>
               </div>
             </section>
@@ -2986,6 +3160,11 @@ export default function App() {
                 ))}
               </div>
               <footer><span><ShieldCheck /> Pouze pro čtení</span></footer>
+              <div className="form-actions">
+                <button className="action-claim" onClick={() => void openArchivedMemberClaims(selectedArchiveMember)}>
+                  <TriangleAlert /> Pojistné události
+                </button>
+              </div>
             </section>
           </div>
         </Shell>
@@ -3121,7 +3300,7 @@ export default function App() {
             <header className="member-payments-header">
               <div><small>Pojistná potvrzení</small><h2>Hromadné potvrzení a export</h2></div>
             </header>
-            <p>Vybere plně uhrazené aktivní členy aktuálního pojistného roku. Filtry lze kombinovat; prázdná hodnota znamená všechny.</p>
+            <p>Vybere plně uhrazené aktivní členy zvoleného pojistného roku. Filtry lze kombinovat; prázdná hodnota znamená všechny.</p>
             <div className="payment-settings-form">
               <label>Úhrada od data<input type="date" value={batchCertificateFilter.paidFrom} onChange={(event) => setBatchCertificateFilter({ ...batchCertificateFilter, paidFrom: event.target.value })} /></label>
               <label>Kód OC<select value={batchCertificateFilter.organizationCode} onChange={(event) => setBatchCertificateFilter({ ...batchCertificateFilter, organizationCode: event.target.value })}><option value="">Všechny</option><option value="1">OC 1</option><option value="2">OC 2</option></select></label>
@@ -3172,7 +3351,7 @@ export default function App() {
     const selectedOrganization=applicationOptions.organizations.find(item=>item.organization===applicationForm.organization);
     const nextStart=(()=>{const d=new Date();return new Date(d.getFullYear(),d.getMonth()+1,1).toLocaleDateString("cs-CZ")})();
     const variant=applicationForm.category==="B"?"Standard":applicationForm.category==="A"?"Řidič":"Strojvedoucí";
-    return <Shell {...shellUpdater} active="Pojištěnci" user={user} onNavigate={navigate} onLogout={leaveToLogin}><main className="page application-page"><header><button className="back-link" onClick={()=>setScreen("Pojištěnci")}><ArrowLeft/> Zpět</button><small>Nový pojištěnec</small><h1>Vyplnit přihlášku</h1><div className="application-steps"><span className={applicationStep===1?"active":""}>1 Osobní údaje a pojištění</span><span className={applicationStep===2?"active":""}>2 Zařazení pojištěnce</span><span className={applicationStep===3?"active":""}>3 Rekapitulace</span></div></header>
+    return <Shell {...shellUpdater} active="Pojištěnci" user={user} onNavigate={navigate} onLogout={leaveToLogin}><UnsavedChangesDialog request={unsavedLeave} busy={saving} close={()=>setUnsavedLeave(null)}/><main className="page application-page"><header><button className="back-link" onClick={()=>navigate("Pojištěnci")}><ArrowLeft/> Zpět</button><small>Nový pojištěnec</small><h1>Vyplnit přihlášku</h1><div className="application-steps"><span className={applicationStep===1?"active":""}>1 Osobní údaje a pojištění</span><span className={applicationStep===2?"active":""}>2 Zařazení pojištěnce</span><span className={applicationStep===3?"active":""}>3 Rekapitulace</span></div></header>
       {error&&<div className="message error">{error}</div>}{notice&&<div className="message success">{notice}</div>}
       {applicationResult?<section className="application-summary"><h2>Přihláška je dokončena</h2><p>Člen i neměnný PDF snapshot byly uloženy společně.</p><dl><div><dt>Evidenční číslo</dt><dd>{applicationResult.registrationNumber}</dd></div><div><dt>Datum přihlášky</dt><dd>{displayDate(applicationResult.applicationDate)}</dd></div><div><dt>Pojištění od</dt><dd>{displayDate(applicationResult.insuranceFrom)}</dd></div></dl><div className="form-actions"><button className="primary" disabled={saving} onClick={()=>void printCompletedApplication(applicationResult.pdfPath)}><Printer/> Tisk</button><button onClick={()=>void invoke("open_generated_pdf",{path:applicationResult.pdfPath,folder:false})}><FileText/> Otevřít PDF</button><button disabled={saving} onClick={()=>void saveApplicationSnapshot(applicationResult.applicationId)}><Save/> Uložit PDF</button><button onClick={()=>setScreen("Pojištěnci")}>Hotovo</button></div></section>:
       applicationStep===1?<section className="application-form application-form-redesign">
@@ -3226,6 +3405,7 @@ export default function App() {
       ] as const;
       return (
         <Shell {...shellUpdater} active="Seznam" user={user} onNavigate={navigate} onLogout={leaveToLogin}>
+          {unsavedLeave && <div className="update-dialog-backdrop" role="presentation"><section className="update-dialog" role="dialog" aria-modal="true" aria-labelledby="unsaved-title"><small>Ochrana rozpracovaných dat</small><h2 id="unsaved-title">MÁTE NEULOŽENÉ ZMĚNY</h2><p>Provedli jste změny, které ještě nejsou uložené. Co chcete udělat?</p><footer className="form-actions"><button onClick={() => setUnsavedLeave(null)}>Zůstat a pokračovat</button><button className="primary" disabled={saving} onClick={async () => { const request=unsavedLeave; if(await request.save()){setUnsavedLeave(null);request.leave();} }}>Uložit a odejít</button><button className="danger" disabled={saving} onClick={() => { const request=unsavedLeave;setUnsavedLeave(null);request.leave(); }}>Odejít bez uložení</button></footer></section></div>}
           <div className="page member-profile-page">
             <header className="page-header">
               <div><small>Seznam pojištěnců</small><h1>Detail člena</h1></div>
@@ -3278,12 +3458,13 @@ export default function App() {
                     <label>E-mail<input type="email" value={memberEdit.email} onChange={(event) => setMemberEdit({ ...memberEdit, email: event.target.value })} /></label>
                     <label>Telefon<input type="tel" value={memberEdit.phone} onChange={(event) => setMemberEdit({ ...memberEdit, phone: event.target.value })} /></label>
                     <label>Skutečně uhrazeno (Kč)<input type="number" value={memberEdit.actualPayment ?? ""} onChange={(event) => setMemberEdit({ ...memberEdit, actualPayment: event.target.value ? Number(event.target.value) : null })} /></label>
-                    <label>Skutečné ukončení<input type="date" value={memberEdit.actualTermination} onChange={(event) => setMemberEdit({ ...memberEdit, actualTermination: event.target.value })} /></label>
+                    <label>Datum ukončení pojištění<input type="date" value={memberEdit.actualTermination} onChange={(event) => setMemberEdit({ ...memberEdit, actualTermination: event.target.value })} /></label>
+                    <label className="checkbox-field"><input type="checkbox" checked={memberEdit.insuranceTerminated} onChange={(event) => setMemberEdit({ ...memberEdit, insuranceTerminated: event.target.checked })} /> Pojištění ukončeno</label>
                     <label className="wide">Poznámka<textarea value={memberEdit.note} onChange={(event) => setMemberEdit({ ...memberEdit, note: event.target.value })} /></label>
                   </div>
                   <footer className="form-actions">
                     <button className="primary" disabled={saving} onClick={saveMemberEdit}>Uložit změny</button>
-                    <button disabled={saving} onClick={() => { setEditingMember(false); setMemberEdit(null); }}>Zrušit</button>
+                    <button disabled={saving} onClick={cancelMemberEdit}>Zrušit</button>
                   </footer>
                 </section>
               )}
@@ -3464,7 +3645,7 @@ export default function App() {
             <div>
               <small>Přehled pojištěnců</small>
               <h1>Seznam všech členů</h1>
-              <p>Pojištění {dashboard?.activeInsuranceYear ?? "—"}</p>
+              <p>Pracovní pojistný rok {workingYear ?? dashboard?.activeInsuranceYear ?? "—"}</p>
             </div>
           </header>
           {error && <div className="message error">{error}</div>}
@@ -3566,6 +3747,7 @@ export default function App() {
 
   return (
     <Shell {...shellUpdater} active="Pojištěnci" user={user} onNavigate={navigate} onLogout={leaveToLogin}>
+      <UnsavedChangesDialog request={unsavedLeave} busy={saving} close={()=>setUnsavedLeave(null)}/>
       <div className="page insured-screen">
       <section className="insured-panel">
         <header>

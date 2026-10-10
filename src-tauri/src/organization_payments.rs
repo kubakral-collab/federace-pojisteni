@@ -82,7 +82,7 @@ pub fn ensure_schema(c: &Connection) -> rusqlite::Result<()> {
 }
 
 pub fn organizations(c: &Connection, year: i32) -> rusqlite::Result<Vec<OrganizationOption>> {
-    let mut s=c.prepare(r#"SELECT TRIM("ZO"),COUNT(*) FROM "Seznam" WHERE CAST(substr("PojištěníOd",1,4) AS INTEGER)=?1 AND NULLIF(TRIM("Ukončení"),'') IS NULL AND NULLIF(TRIM("ZO"),'') IS NOT NULL GROUP BY TRIM("ZO") ORDER BY TRIM("ZO")"#)?;
+    let mut s=c.prepare(r#"SELECT TRIM("ZO"),COUNT(*) FROM "Seznam" WHERE CAST(substr("PojištěníOd",1,4) AS INTEGER)=?1 AND NOT (NULLIF(TRIM("Ukončení"),'') IS NOT NULL AND COALESCE("PojisteniUkonceno",0)=1) AND NULLIF(TRIM("ZO"),'') IS NOT NULL GROUP BY TRIM("ZO") ORDER BY TRIM("ZO")"#)?;
     let result = s
         .query_map([year], |r| {
             Ok(OrganizationOption {
@@ -94,7 +94,7 @@ pub fn organizations(c: &Connection, year: i32) -> rusqlite::Result<Vec<Organiza
     result
 }
 pub fn members(c: &Connection, org: &str, year: i32) -> rusqlite::Result<Vec<OrganizationMember>> {
-    let mut s=c.prepare(r#"SELECT rowid,COALESCE(CAST("Identifikátor" AS TEXT),''),TRIM(COALESCE("Titul",'')||' '||COALESCE("Příjmení",'')||' '||COALESCE("Jméno",'')),COALESCE(CAST("EvČíslo" AS TEXT),''),COALESCE("RočPojistné",0),COALESCE("PojistnáČástka",0),COALESCE("SkutÚhrada",0) FROM "Seznam" WHERE CAST(substr("PojištěníOd",1,4) AS INTEGER)=?1 AND NULLIF(TRIM("Ukončení"),'') IS NULL AND TRIM("ZO")=TRIM(?2) ORDER BY CAST("EvČíslo" AS INTEGER),"Příjmení""#)?;
+    let mut s=c.prepare(r#"SELECT rowid,COALESCE(CAST("Identifikátor" AS TEXT),''),TRIM(COALESCE("Titul",'')||' '||COALESCE("Příjmení",'')||' '||COALESCE("Jméno",'')),COALESCE(CAST("EvČíslo" AS TEXT),''),COALESCE("RočPojistné",0),COALESCE("PojistnáČástka",0),COALESCE("SkutÚhrada",0) FROM "Seznam" WHERE CAST(substr("PojištěníOd",1,4) AS INTEGER)=?1 AND NOT (NULLIF(TRIM("Ukončení"),'') IS NOT NULL AND COALESCE("PojisteniUkonceno",0)=1) AND TRIM("ZO")=TRIM(?2) ORDER BY CAST("EvČíslo" AS INTEGER),"Příjmení""#)?;
     let result = s
         .query_map(params![year, org], |r| {
             Ok(OrganizationMember {

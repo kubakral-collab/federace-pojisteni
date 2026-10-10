@@ -285,10 +285,14 @@ pub fn create(
     #[cfg(test)]
     {
         ensure_schema(&connection).unwrap();
-        connection.execute_batch(r#"CREATE TABLE IF NOT EXISTS "AuditLog" (
+        connection
+            .execute_batch(
+                r#"CREATE TABLE IF NOT EXISTS "AuditLog" (
             "Id" INTEGER PRIMARY KEY AUTOINCREMENT, "DatumČas" TEXT NOT NULL,
             "Uživatel" TEXT NOT NULL, "Operace" TEXT NOT NULL,
-            "IdentifikátorPojištěnce" TEXT, "Výsledek" TEXT NOT NULL);"#).unwrap();
+            "IdentifikátorPojištěnce" TEXT, "Výsledek" TEXT NOT NULL);"#,
+            )
+            .unwrap();
     }
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -649,6 +653,55 @@ mod tests {
         }
         export_pdf(&connection, 116, &destination).unwrap();
         assert!(fs::metadata(destination).unwrap().len() > 1_000);
+    }
+
+    #[test]
+    fn archived_claim_edit_preserves_insurance_year() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("archived-claim.sqlite");
+        let original = NewClaim {
+            insurance_row_id: 26,
+            occurred_on: Some("2026-06-10".into()),
+            reported_on: Some("2026-06-11".into()),
+            phone: None,
+            employer: Some("Dopravce".into()),
+            occupation: Some("Strojvedoucí".into()),
+            assessed_damage: Some(15_000.0),
+            insurance_benefit: None,
+            description: Some("Původní popis".into()),
+            note: None,
+            additional_information: None,
+            closed_on: None,
+            handled_by: None,
+            report_position: None,
+        };
+        let id = create(&database, 42, 2026, original, "test-user").unwrap();
+        let changed = NewClaim {
+            insurance_row_id: 26,
+            occurred_on: Some("2026-06-10".into()),
+            reported_on: Some("2026-06-11".into()),
+            phone: None,
+            employer: Some("Dopravce".into()),
+            occupation: Some("Strojvedoucí".into()),
+            assessed_damage: Some(16_000.0),
+            insurance_benefit: Some(12_000.0),
+            description: Some("Doplněný archivní popis".into()),
+            note: None,
+            additional_information: None,
+            closed_on: None,
+            handled_by: None,
+            report_position: None,
+        };
+        update(&database, id, 42, 2026, changed, "test-user").unwrap();
+        let connection = Connection::open(database).unwrap();
+        let saved: (i32, String, f64) = connection
+            .query_row(
+                r#"SELECT "PojistnyRok","PopisUdalosti","ZjistenaSkoda" FROM "PojistneUdalosti" WHERE "ID"=?1"#,
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(saved, (2026, "Doplněný archivní popis".into(), 16_000.0));
     }
 
     #[test]

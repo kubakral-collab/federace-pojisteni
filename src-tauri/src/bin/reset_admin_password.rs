@@ -36,8 +36,8 @@ fn main() -> Result<(), String> {
         .hash_password(password.as_bytes(), &SaltString::generate(&mut OsRng))
         .map_err(|_| "Nové heslo se nepodařilo zahashovat.".to_string())?
         .to_string();
-    let mut connection = Connection::open(&database)
-        .map_err(|_| "Databázi se nepodařilo otevřít.".to_string())?;
+    let mut connection =
+        Connection::open(&database).map_err(|_| "Databázi se nepodařilo otevřít.".to_string())?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|_| "Databáze je používána; nejprve ukončete aplikaci.".to_string())?;

@@ -5,13 +5,14 @@ const backend = await readFile(new URL("../src-tauri/src/lib.rs", import.meta.ur
 const main = await readFile(new URL("../src/main.tsx", import.meta.url), "utf8");
 const fontScale = await readFile(new URL("../src/ui/fontScale.ts", import.meta.url), "utf8");
 const css = await readFile(new URL("../src/App.css", import.meta.url), "utf8");
+const defaultCapability = await readFile(new URL("../src-tauri/capabilities/default.json", import.meta.url), "utf8");
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 
 const requiredUiContracts = [
   'invoke<StartupStatus>("get_startup_status")',
   'invoke<{ initialized: boolean }>("get_auth_status")',
   'authInitialized ? "login" : "initialize_admin"',
-  'invoke<DashboardInfo>("get_dashboard")',
+  'invoke<DashboardInfo>("get_dashboard", { insuranceYear: workingYear })',
   'invoke<MemberPage>("list_members"',
   'invoke<Member>("get_member"',
   'invoke<MemberPage>("list_members", {',
@@ -26,8 +27,10 @@ const requiredUiContracts = [
   "startupStatus.smokeMode",
   "startupStatus.databasePath",
   'invoke<string>("create_blank_application_for_printing")',
-  'invoke("print_generated_pdf",{path,deleteAfterPrint:true})',
-  'invoke("print_generated_pdf",{path,deleteAfterPrint:false})',
+  'invoke<string>("print_generated_pdf",{path,deleteAfterPrint})',
+  'convertFileSrc(printablePath)',
+  'invoke("show_pdf_print_dialog",{label})',
+  'await printWindow.close()',
   '<Printer/> Tisk',
   'function RegistrationNumberPicker(',
   'invoke<RegistrationNumberOptions>("get_registration_number_options")',
@@ -37,9 +40,21 @@ const requiredUiContracts = [
   "FONT_SCALE_OPTIONS.map",
   "saveFontScale(option.value)",
   "Seznam pojištěnců – Jan Novák – evidenční číslo 1345",
-  'invoke<string[]>("list_certificate_organizations")',
+  'invoke<string[]>("list_certificate_organizations",',
   "Hromadné potvrzení a export",
   "Exportovat jedno PDF",
+  "new WebviewWindow(label",
+  "memberDetailRowId",
+  "MÁTE NEULOŽENÉ ZMĚNY",
+  "Zůstat a pokračovat",
+  "Uložit a odejít",
+  "Odejít bez uložení",
+  'invoke<number[]>("list_working_insurance_years")',
+  'invoke<number>("prepare_next_insurance_year")',
+  'Založit nový pojistný rok',
+  'Aktivní pojistný rok',
+  'Pojištění ukončeno',
+  'insuranceTerminated',
 ];
 
 const missing = requiredUiContracts.filter((contract) => !app.includes(contract));
@@ -59,9 +74,10 @@ for (const item of requiredNavigationOrder) {
   }
   previousNavigationIndex = index;
 }
-for (const contract of ["fn create_blank_application_for_printing(", "fn print_generated_pdf(", '"-Verb", "Print"', "fn registration_number_options(", "fn allocate_registration_number(", "get_registration_number_options,", "fn list_certificate_organizations(", "merge_pdf_documents(documents)"]) {
+for (const contract of ["fn create_blank_application_for_printing(", "fn print_generated_pdf(", "fn show_pdf_print_dialog(", "COREWEBVIEW2_PRINT_DIALOG_KIND_SYSTEM", "ShowPrintUI", "fn registration_number_options(", "fn allocate_registration_number(", "get_registration_number_options,", "fn list_certificate_organizations(", "merge_pdf_documents(documents)"]) {
   if (!backend.includes(contract)) missing.push(contract);
 }
+if (backend.includes('.args(["-Verb", "Print"')) missing.push("silent shell Print verb is still used for application printing");
 for (const contract of ["initializeFontScale();"]) {
   if (!main.includes(contract)) missing.push(contract);
 }
@@ -74,7 +90,12 @@ for (const contract of ["zoom: var(--ui-scale)", "overflow-y: auto", ".font-size
 if (app.includes('"export_blank_application"') || backend.includes("fn export_blank_application(")) {
   missing.push("legacy blank-application Save dialog flow is still present");
 }
-if (packageJson.version !== "0.25.2") missing.push("package version 0.25.2");
+const navigationBlock = app.slice(app.indexOf("const navigation:"), app.indexOf("return (", app.indexOf("const navigation:")));
+if (navigationBlock.includes('label: "Historická data"')) missing.push("Historická data remain visible in navigation");
+if (packageJson.version !== "0.26.0") missing.push("package version 0.26.0");
+if (!defaultCapability.includes('"core:window:allow-close"')) missing.push("member detail native window close permission");
+if (!defaultCapability.includes('"core:window:allow-destroy"')) missing.push("member detail native window destroy permission");
+if (!app.includes("getCurrentWindow().destroy()")) missing.push("member detail native window definitive leave");
 
 if (missing.length) {
   console.error(`UI smoke contract is incomplete:\n- ${missing.join("\n- ")}`);

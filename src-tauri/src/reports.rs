@@ -134,7 +134,7 @@ fn definition(kind: &str) -> Result<(&'static str, &'static str), String> {
         )),
         "terminations" => Ok((
             "Ukončení pojištění",
-            r#"SELECT "Ukončení", "EvČíslo" AS "Ev. číslo", "Příjmení", "Jméno", "KódOC" AS "OC", "ZO", "Kategorie" FROM "Seznam" WHERE pojisteni_rok("Ukončení")=?1 AND (?4='' OR date("Ukončení")>=date(?4)) AND (?5='' OR date("Ukončení")<=date(?5))"#,
+            r#"SELECT "Ukončení", "EvČíslo" AS "Ev. číslo", "Příjmení", "Jméno", "KódOC" AS "OC", "ZO", "Kategorie" FROM "Seznam" WHERE pojisteni_rok("Ukončení")=?1 AND COALESCE("PojisteniUkonceno",0)=1 AND (?4='' OR date("Ukončení")>=date(?4)) AND (?5='' OR date("Ukončení")<=date(?5))"#,
         )),
         "contacts" => Ok((
             "Kontaktní seznam",
@@ -483,16 +483,48 @@ fn claims_pdf(report: &ReportPreview, destination: &Path) -> Result<(), String> 
             });
         }
         let columns = [7.5, 14.0, 67.0, 78.0, 126.0, 171.0, 190.0, 221.0, 267.0];
-        let headers = ["Poř.:", "Pojištěnec:", "Evid:", "Typ pojištění", "Pojistné období", "PU ze dne", "Škoda", "Odborová organizace", "Vypořádáno"];
-        let cells = [at(0), at(1), at(2), at(3), at(4), at(5), at(6), at(7), at(8)];
+        let headers = [
+            "Poř.:",
+            "Pojištěnec:",
+            "Evid:",
+            "Typ pojištění",
+            "Pojistné období",
+            "PU ze dne",
+            "Škoda",
+            "Odborová organizace",
+            "Vypořádáno",
+        ];
+        let cells = [
+            at(0),
+            at(1),
+            at(2),
+            at(3),
+            at(4),
+            at(5),
+            at(6),
+            at(7),
+            at(8),
+        ];
         current.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.85, None)));
         for (x, header) in columns.iter().zip(headers.iter()) {
             current.use_text(*header, 6.0, Mm(*x), Mm(y + 0.7), &bold);
         }
         current.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
         for (index, (x, cell)) in columns.iter().zip(cells.iter()).enumerate() {
-            let shown = if index == 3 { clipped(cell, 27) } else if index == 7 { clipped(cell, 25) } else { clipped(cell, 20) };
-            current.use_text(shown, 6.2, Mm(*x), Mm(y - 3.6), if index < 2 { &bold } else { &regular });
+            let shown = if index == 3 {
+                clipped(cell, 27)
+            } else if index == 7 {
+                clipped(cell, 25)
+            } else {
+                clipped(cell, 20)
+            };
+            current.use_text(
+                shown,
+                6.2,
+                Mm(*x),
+                Mm(y - 3.6),
+                if index < 2 { &bold } else { &regular },
+            );
         }
         if !at(8).trim().is_empty() {
             current.set_fill_color(Color::Rgb(Rgb::new(1.0, 0.0, 0.0, None)));
@@ -502,7 +534,10 @@ fn claims_pdf(report: &ReportPreview, destination: &Path) -> Result<(), String> 
         current.set_fill_color(Color::Rgb(Rgb::new(0.12, 0.12, 0.12, None)));
         current.use_text("Popis události:", 6.5, Mm(7.0), Mm(y), &bold_italic);
         current.add_line(Line {
-            points: vec![(Point::new(Mm(7.0), Mm(y - 0.6)), false), (Point::new(Mm(29.0), Mm(y - 0.6)), false)],
+            points: vec![
+                (Point::new(Mm(7.0), Mm(y - 0.6)), false),
+                (Point::new(Mm(29.0), Mm(y - 0.6)), false),
+            ],
             is_closed: false,
         });
         y -= 4.0;
@@ -522,7 +557,10 @@ fn claims_pdf(report: &ReportPreview, destination: &Path) -> Result<(), String> 
         current.set_outline_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
         current.set_outline_thickness(0.5);
         current.add_line(Line {
-            points: vec![(Point::new(Mm(7.0), Mm(y - 1.0)), false), (Point::new(Mm(290.0), Mm(y - 1.0)), false)],
+            points: vec![
+                (Point::new(Mm(7.0), Mm(y - 1.0)), false),
+                (Point::new(Mm(290.0), Mm(y - 1.0)), false),
+            ],
             is_closed: false,
         });
         y -= 6.0;
