@@ -9,7 +9,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub const DB_SCHEMA_VERSION: i64 = 2;
+pub const DB_SCHEMA_VERSION: i64 = 3;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -105,6 +105,7 @@ const REQUIRED_V1: &[(&str, &[&str])] = &[
 ];
 
 const REQUIRED_V2: &[(&str, &[&str])] = &[("Seznam", &["PojisteniUkonceno"])];
+const REQUIRED_V3: &[(&str, &[&str])] = &[("NastaveniDokladu", &["Makler"])];
 
 fn has_table(connection: &Connection, table: &str) -> rusqlite::Result<bool> {
     connection.query_row(
@@ -253,6 +254,11 @@ fn validate_v2(connection: &Connection) -> Result<(), String> {
     }
 }
 
+fn validate_v3(connection: &Connection) -> Result<(), String> {
+    validate_v2(connection)?;
+    validate_tables(connection, REQUIRED_V3)
+}
+
 fn ensure_column(connection: &Connection, table: &str, column: &str) -> rusqlite::Result<()> {
     if !columns(connection, table)?
         .iter()
@@ -327,6 +333,16 @@ fn manual_years_v2(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
     Ok(())
 }
 
+fn insurer_overview_v3(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+    if !columns(transaction, "NastaveniDokladu")?
+        .iter()
+        .any(|name| name == "Makler")
+    {
+        transaction.execute(r#"ALTER TABLE "NastaveniDokladu" ADD COLUMN "Makler" TEXT NOT NULL DEFAULT 'Abaccus finance s.r.o.'"#, [])?;
+    }
+    Ok(())
+}
+
 fn migrations() -> Vec<Migration> {
     vec![
         Migration {
@@ -340,6 +356,12 @@ fn migrations() -> Vec<Migration> {
             target: 2,
             name: "manual-insurance-years-v2",
             apply: manual_years_v2,
+        },
+        Migration {
+            source: 2,
+            target: 3,
+            name: "insurer-overview-settings-v3",
+            apply: insurer_overview_v3,
         },
     ]
 }
@@ -406,8 +428,11 @@ fn apply_chain(
                 error.to_string(),
             )
         })?;
-        if target == DB_SCHEMA_VERSION && migration.target == DB_SCHEMA_VERSION {
-            validate_v2(&transaction)
+        if target == DB_SCHEMA_VERSION
+            && migration.target == DB_SCHEMA_VERSION
+            && registry.iter().any(|item| item.name == "baseline-v1")
+        {
+            validate_v3(&transaction)
                 .map_err(|error| (current, migration.target, migration.name.into(), error))?;
         }
         transaction
@@ -470,6 +495,7 @@ pub fn migrate(
         0 => validate_v0(&connection),
         1 => validate_v1(&connection),
         2 => validate_v2(&connection),
+        3 => validate_v3(&connection),
         _ => Err("nepodporovaná verze databáze".into()),
     };
     validation.map_err(|cause| MigrationFailure {
@@ -702,7 +728,7 @@ mod tests {
     }
 
     #[test]
-    fn j_existing_v2_is_not_backed_up_or_modified() {
+    fn j_existing_current_schema_is_not_backed_up_or_modified() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("v2.sqlite");
         legacy(&db);
@@ -724,7 +750,7 @@ mod tests {
         tx.pragma_update(None, "user_version", 1).unwrap();
         tx.commit().unwrap();
         let outcome = migrate(&db, &dir.path().join("backups"), false).unwrap();
-        assert_eq!(outcome.schema_version, 2);
+        assert_eq!(outcome.schema_version, DB_SCHEMA_VERSION);
         assert!(outcome.backup_path.as_ref().unwrap().is_file());
         let connection = Connection::open(&db).unwrap();
         assert!(columns(&connection, "Seznam")

@@ -1,6 +1,6 @@
 use printpdf::{
     path::{PaintMode, WindingOrder},
-    Color, Line, Mm, PdfDocument, Point, Polygon, Rgb,
+    Color, Image, ImageTransform, Line, Mm, PdfDocument, Point, Polygon, Rgb,
 };
 use rusqlite::{
     params,
@@ -8,7 +8,641 @@ use rusqlite::{
     Connection,
 };
 use serde::{Deserialize, Serialize};
-use std::{fs::File, io::BufWriter, path::Path};
+use std::{collections::BTreeMap, fs::File, io::BufWriter, path::Path};
+
+const INSURER_SIGNATURE_STAMP: &[u8] = include_bytes!("../resources/insurer-signature-stamp.jpg");
+
+pub struct InsurerPdf {
+    pub policyholder: String,
+    pub contract_number: String,
+    pub broker: String,
+    pub insurance_year: i32,
+    pub rows: Vec<InsurerPdfRow>,
+}
+pub struct InsurerPdfRow {
+    pub sequence: usize,
+    pub registration_number: String,
+    pub insured: String,
+    pub personal_id: String,
+    pub insurance_from: String,
+    pub insurance_to: String,
+    pub termination: String,
+    pub premium: i64,
+    pub unused_premium: i64,
+    pub annual_limit: i64,
+    pub category: String,
+    pub loss: bool,
+    pub note: String,
+}
+
+pub fn insurer_overview_pdf(report: &InsurerPdf, destination: &Path) -> Result<(), String> {
+    let (document, first_page, first_layer) =
+        PdfDocument::new("Přehled pro pojišťovnu", Mm(297.0), Mm(210.0), "Přehled");
+    let regular = document
+        .add_external_font(
+            File::open(r"C:\Windows\Fonts\arial.ttf")
+                .map_err(|_| "Písmo není dostupné.".to_string())?,
+        )
+        .map_err(|_| "Písmo není dostupné.".to_string())?;
+    let bold = document
+        .add_external_font(
+            File::open(r"C:\Windows\Fonts\arialbd.ttf")
+                .map_err(|_| "Písmo není dostupné.".to_string())?,
+        )
+        .map_err(|_| "Písmo není dostupné.".to_string())?;
+    let italic = document
+        .add_external_font(
+            File::open(r"C:\Windows\Fonts\ariali.ttf")
+                .map_err(|_| "Písmo není dostupné.".to_string())?,
+        )
+        .map_err(|_| "Písmo není dostupné.".to_string())?;
+    let bold_italic = document
+        .add_external_font(
+            File::open(r"C:\Windows\Fonts\arialbi.ttf")
+                .map_err(|_| "Písmo není dostupné.".to_string())?,
+        )
+        .map_err(|_| "Písmo není dostupné.".to_string())?;
+    let headers = [
+        "Poř.čís",
+        "Evid. číslo",
+        "Pojištěná osoba",
+        "RČ",
+        "Pojištěn Od",
+        "Pojištěn Do",
+        "Ukončení",
+        "Roční pojistné",
+        "Nespotř. pojistné",
+        "Limit plnění",
+        "Roční limit plnění",
+        "Kategorie",
+        "Poznámka",
+    ];
+    let widths = [
+        10.3, 16.0, 40.0, 18.5, 19.0, 19.0, 18.5, 24.0, 26.0, 18.0, 26.0, 18.0, 24.9,
+    ];
+    let data_pages = if report.rows.len() <= 30 {
+        1
+    } else {
+        1 + (report.rows.len() - 30 + 38) / 39
+    };
+    let summary = insurer_summary(report)?;
+    let rows_before_last = if data_pages == 1 {
+        0
+    } else {
+        30 + (data_pages - 2) * 39
+    };
+    let rows_on_last = report.rows.len().saturating_sub(rows_before_last);
+    let last_rows_start_y = if data_pages == 1 { 150.5 } else { 189.5 };
+    let last_rows_end_y = last_rows_start_y - rows_on_last as f32 * 4.05;
+    let summary_fits_last_page = last_rows_end_y >= 114.0;
+    let page_count = data_pages + usize::from(!summary_fits_last_page);
+    for page_number in 0..data_pages {
+        let (page, layer) = if page_number == 0 {
+            (first_page, first_layer)
+        } else {
+            document.add_page(Mm(297.0), Mm(210.0), "Přehled")
+        };
+        let current = document.get_page(page).get_layer(layer);
+        current.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.75, None)));
+        current.use_text(
+            "S dokumentem je nutno nakládat ve smyslu zákona 101/2000 Sb., o ochraně osobních údajů a ve smyslu Nařízení EU č. 2016/679 o ochraně fyzických osob (tzv. GDPR) !",
+            6.0, Mm(66.0), Mm(202.0), &bold_italic,
+        );
+        let mut y = if page_number == 0 {
+            let labels = ["Pojištění klienta:", "Příloha č. 2 k PS č.:", "Makléř:"];
+            let values = [
+                &report.policyholder,
+                &report.contract_number,
+                &report.broker,
+            ];
+            current.set_outline_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
+            current.set_outline_thickness(0.35);
+            for i in 0..3 {
+                let top = 195.0 - i as f32 * 4.2;
+                current.add_polygon(Polygon {
+                    rings: vec![vec![
+                        (Point::new(Mm(10.0), Mm(top - 3.8)), false),
+                        (Point::new(Mm(90.0), Mm(top - 3.8)), false),
+                        (Point::new(Mm(90.0), Mm(top)), false),
+                        (Point::new(Mm(10.0), Mm(top)), false),
+                    ]],
+                    mode: PaintMode::Stroke,
+                    winding_order: WindingOrder::NonZero,
+                });
+                current.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
+                current.use_text(labels[i], 7.3, Mm(10.2), Mm(top - 3.0), &regular);
+                current.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.65, None)));
+                current.use_text(values[i], 7.3, Mm(43.5), Mm(top - 3.0), &bold);
+            }
+            for (i, (label, value)) in [
+                (
+                    "Počátek pojištění:",
+                    format!("1.1.{}", report.insurance_year),
+                ),
+                ("Výročí PS:", format!("31.12.{}", report.insurance_year)),
+            ]
+            .iter()
+            .enumerate()
+            {
+                let top = 176.5 - i as f32 * 4.2;
+                current.add_polygon(Polygon {
+                    rings: vec![vec![
+                        (Point::new(Mm(10.0), Mm(top - 3.8)), false),
+                        (Point::new(Mm(70.5), Mm(top - 3.8)), false),
+                        (Point::new(Mm(70.5), Mm(top)), false),
+                        (Point::new(Mm(10.0), Mm(top)), false),
+                    ]],
+                    mode: PaintMode::Stroke,
+                    winding_order: WindingOrder::NonZero,
+                });
+                current.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
+                current.use_text(*label, 7.3, Mm(10.2), Mm(top - 3.0), &regular);
+                current.set_fill_color(Color::Rgb(Rgb::new(0.9, 0.0, 0.0, None)));
+                current.use_text(value, 7.3, Mm(48.0), Mm(top - 3.0), &bold);
+            }
+            157.0
+        } else {
+            196.0
+        };
+        current.set_fill_color(Color::Rgb(Rgb::new(0.88, 0.88, 0.88, None)));
+        current.add_polygon(Polygon {
+            rings: vec![vec![
+                (Point::new(Mm(10.8), Mm(y - 3.0)), false),
+                (Point::new(Mm(289.0), Mm(y - 3.0)), false),
+                (Point::new(Mm(289.0), Mm(y + 2.3)), false),
+                (Point::new(Mm(10.8), Mm(y + 2.3)), false),
+            ]],
+            mode: PaintMode::Fill,
+            winding_order: WindingOrder::NonZero,
+        });
+        current.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.28, 0.62, None)));
+        let mut x = 10.8;
+        for (header, width) in headers.iter().zip(widths) {
+            let header_width = estimated_text_width(header, 6.1);
+            let header_x = x + (width - header_width).max(0.0) / 2.0;
+            current.use_text(*header, 6.1, Mm(header_x), Mm(y - 1.4), &bold);
+            x += width;
+        }
+        y -= 6.5;
+        let (skip, take) = if page_number == 0 {
+            (0, 30)
+        } else {
+            (30 + (page_number - 1) * 39, 39)
+        };
+        for row in report.rows.iter().skip(skip).take(take) {
+            let row_top = y + 2.0;
+            let cells = [
+                format!("{}.", row.sequence),
+                row.registration_number.clone(),
+                row.insured.clone(),
+                row.personal_id.clone(),
+                access_date(&row.insurance_from),
+                access_date(&row.insurance_to),
+                access_date(&row.termination),
+                access_number(row.premium),
+                if row.unused_premium == 0 {
+                    String::new()
+                } else {
+                    access_number(row.unused_premium)
+                },
+                if row.annual_limit >= 500_000 {
+                    String::new()
+                } else {
+                    access_number(row.annual_limit / 2)
+                },
+                access_number(row.annual_limit),
+                row.category.clone(),
+                row.note.clone(),
+            ];
+            current.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
+            let mut x = 10.8;
+            for (cell, width) in cells.iter().zip(widths) {
+                const CELL_PADDING: f32 = 1.1;
+                let available = (width - 2.0 * CELL_PADDING).max(1.0);
+                let shown = fit_text(cell, available, 6.7);
+                current.use_text(shown, 6.7, Mm(x + CELL_PADDING), Mm(y - 0.55), &regular);
+                x += width;
+            }
+            current.set_outline_color(Color::Rgb(Rgb::new(0.55, 0.55, 0.55, None)));
+            current.set_outline_thickness(0.35);
+            current.add_line(Line {
+                points: vec![
+                    (Point::new(Mm(10.8), Mm(row_top)), false),
+                    (Point::new(Mm(289.0), Mm(row_top)), false),
+                ],
+                is_closed: false,
+            });
+            y -= 4.05;
+        }
+        let mut grid_x = 10.8;
+        for width in widths {
+            current.add_line(Line {
+                points: vec![
+                    (Point::new(Mm(grid_x), Mm(y + 4.05)), false),
+                    (
+                        Point::new(Mm(grid_x), Mm(if page_number == 0 { 159.3 } else { 198.3 })),
+                        false,
+                    ),
+                ],
+                is_closed: false,
+            });
+            grid_x += width;
+        }
+        current.add_line(Line {
+            points: vec![
+                (Point::new(Mm(289.0), Mm(y + 4.05)), false),
+                (
+                    Point::new(Mm(289.0), Mm(if page_number == 0 { 159.3 } else { 198.3 })),
+                    false,
+                ),
+            ],
+            is_closed: false,
+        });
+        if page_number + 1 == data_pages && summary_fits_last_page {
+            draw_insurer_summary(
+                &current,
+                report,
+                &summary,
+                y + 1.0,
+                &regular,
+                &bold,
+                &italic,
+                &bold_italic,
+            )?;
+        }
+        footer(&current, page_number + 1, page_count, &italic);
+    }
+    if !summary_fits_last_page {
+        let (page, layer) = document.add_page(Mm(297.0), Mm(210.0), "Souhrn");
+        let current = document.get_page(page).get_layer(layer);
+        draw_insurer_summary(
+            &current,
+            report,
+            &summary,
+            196.0,
+            &regular,
+            &bold,
+            &italic,
+            &bold_italic,
+        )?;
+        footer(&current, page_count, page_count, &italic);
+    }
+    document
+        .save(&mut BufWriter::new(
+            File::create(destination).map_err(|_| "PDF se nepodařilo uložit.".to_string())?,
+        ))
+        .map_err(|_| "PDF se nepodařilo vytvořit.".to_string())
+}
+
+struct InsurerSummary {
+    limits: Vec<i64>,
+    counts: BTreeMap<(i64, String, bool), usize>,
+    premium: i64,
+    unused: i64,
+}
+
+fn insurer_summary(report: &InsurerPdf) -> Result<InsurerSummary, String> {
+    let mut limits = vec![200_000, 240_000, 280_000, 320_000, 360_000, 400_000];
+    let mut counts = BTreeMap::new();
+    for row in &report.rows {
+        if !matches!(row.category.as_str(), "A" | "B" | "C") {
+            return Err(format!(
+                "Souhrn nelze vytvořit: neznámá kategorie {}.",
+                row.category
+            ));
+        }
+        if row.annual_limit <= 0 {
+            return Err("Souhrn nelze vytvořit: chybí roční limit.".into());
+        }
+        limits.push(row.annual_limit);
+        *counts
+            .entry((row.annual_limit, row.category.clone(), row.loss))
+            .or_insert(0) += 1;
+    }
+    limits.sort_unstable();
+    limits.dedup();
+    if counts.values().sum::<usize>() != report.rows.len() {
+        return Err("Souhrn neobsahuje všechny exportované pojištěnce.".into());
+    }
+    Ok(InsurerSummary {
+        limits,
+        counts,
+        premium: report.rows.iter().map(|row| row.premium).sum(),
+        unused: report.rows.iter().map(|row| row.unused_premium).sum(),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_insurer_summary(
+    layer: &printpdf::PdfLayerReference,
+    report: &InsurerPdf,
+    summary: &InsurerSummary,
+    top: f32,
+    regular: &printpdf::IndirectFontRef,
+    bold: &printpdf::IndirectFontRef,
+    italic: &printpdf::IndirectFontRef,
+    bold_italic: &printpdf::IndirectFontRef,
+) -> Result<(), String> {
+    layer.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.65, None)));
+    layer.use_text("Úhrnem počet:", 11.0, Mm(20.0), Mm(top - 4.0), regular);
+    layer.set_fill_color(Color::Rgb(Rgb::new(0.6, 0.0, 0.0, None)));
+    layer.use_text(
+        report.rows.len().to_string(),
+        11.0,
+        Mm(49.0),
+        Mm(top - 4.0),
+        bold,
+    );
+    layer.set_outline_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.65, None)));
+    layer.set_outline_thickness(0.5);
+    layer.add_line(Line {
+        points: vec![
+            (Point::new(Mm(10.0), Mm(top - 8.0)), false),
+            (Point::new(Mm(289.0), Mm(top - 8.0)), false),
+        ],
+        is_closed: false,
+    });
+
+    let x0 = 18.0;
+    let label_width = 20.0;
+    let cell_width = 16.5;
+    let table_width = label_width + 6.0 * cell_width;
+    let category_top = top - 16.0;
+    let category_bottom = category_top - 5.0;
+    let table_top = category_bottom;
+    let table_bottom = table_top - (summary.limits.len() as f32 + 1.0) * 5.0;
+
+    layer.set_fill_color(Color::Rgb(Rgb::new(0.84, 0.84, 0.84, None)));
+    layer.add_polygon(Polygon {
+        rings: vec![vec![
+            (Point::new(Mm(x0 + label_width), Mm(category_bottom)), false),
+            (Point::new(Mm(x0 + table_width), Mm(category_bottom)), false),
+            (Point::new(Mm(x0 + table_width), Mm(category_top)), false),
+            (Point::new(Mm(x0 + label_width), Mm(category_top)), false),
+        ]],
+        mode: PaintMode::Fill,
+        winding_order: WindingOrder::NonZero,
+    });
+    layer.set_outline_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
+    layer.set_outline_thickness(0.35);
+    for y in [category_top, category_bottom] {
+        layer.add_line(Line {
+            points: vec![
+                (Point::new(Mm(x0 + label_width), Mm(y)), false),
+                (Point::new(Mm(x0 + table_width), Mm(y)), false),
+            ],
+            is_closed: false,
+        });
+    }
+    for group in 0..=3 {
+        let x = x0 + label_width + group as f32 * 2.0 * cell_width;
+        layer.add_line(Line {
+            points: vec![
+                (Point::new(Mm(x), Mm(category_bottom)), false),
+                (Point::new(Mm(x), Mm(category_top)), false),
+            ],
+            is_closed: false,
+        });
+    }
+    layer.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
+    for (group, label) in ["Ostatní zaměstnanci", "Řidiči", "Strojvedoucí"]
+        .iter()
+        .enumerate()
+    {
+        let group_x = x0 + label_width + group as f32 * 2.0 * cell_width;
+        let text_width = estimated_text_width(label, 7.4);
+        layer.use_text(
+            *label,
+            7.4,
+            Mm(group_x + (2.0 * cell_width - text_width) / 2.0),
+            Mm(category_top - 3.7),
+            bold_italic,
+        );
+    }
+
+    for row in 0..=summary.limits.len() + 1 {
+        let y = table_top - row as f32 * 5.0;
+        layer.add_line(Line {
+            points: vec![
+                (Point::new(Mm(x0), Mm(y)), false),
+                (Point::new(Mm(x0 + table_width), Mm(y)), false),
+            ],
+            is_closed: false,
+        });
+    }
+    for column in 0..=7 {
+        let x = if column == 0 {
+            x0
+        } else {
+            x0 + label_width + (column - 1) as f32 * cell_width
+        };
+        layer.add_line(Line {
+            points: vec![
+                (Point::new(Mm(x), Mm(table_bottom)), false),
+                (Point::new(Mm(x), Mm(table_top)), false),
+            ],
+            is_closed: false,
+        });
+    }
+    let centered_x = |value: &str, size: f32, left: f32, width: f32| {
+        left + (width - estimated_text_width(value, size)).max(0.0) / 2.0
+    };
+    layer.use_text(
+        "Roční pojistné",
+        7.0,
+        Mm(centered_x("Roční pojistné", 7.0, x0, label_width)),
+        Mm(table_top - 3.7),
+        bold_italic,
+    );
+    for (column, label) in [
+        "Standard",
+        "Se ztrátou",
+        "Standard",
+        "Se ztrátou",
+        "Standard",
+        "Se ztrátou",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let left = x0 + label_width + column as f32 * cell_width;
+        layer.use_text(
+            *label,
+            6.4,
+            Mm(centered_x(label, 6.4, left, cell_width)),
+            Mm(table_top - 3.7),
+            bold_italic,
+        );
+    }
+    for (row_index, limit) in summary.limits.iter().enumerate() {
+        let baseline = table_top - 8.7 - row_index as f32 * 5.0;
+        let limit_text = access_number(*limit);
+        layer.use_text(
+            &limit_text,
+            7.0,
+            Mm(centered_x(&limit_text, 7.0, x0, label_width)),
+            Mm(baseline),
+            italic,
+        );
+        for (column, (category, loss)) in [
+            ("B", false),
+            ("B", true),
+            ("A", false),
+            ("A", true),
+            ("C", false),
+            ("C", true),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let count = summary
+                .counts
+                .get(&(*limit, (*category).to_string(), *loss))
+                .copied()
+                .unwrap_or(0);
+            if count > 0 {
+                let value = count.to_string();
+                let left = x0 + label_width + column as f32 * cell_width;
+                layer.use_text(
+                    &value,
+                    7.0,
+                    Mm(centered_x(&value, 7.0, left, cell_width)),
+                    Mm(baseline),
+                    italic,
+                );
+            }
+        }
+    }
+
+    layer.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.65, None)));
+    for (index, (label, value)) in [
+        ("Úhrnem pojistná částka:", summary.premium),
+        ("Úhrnem nespotř. pojistné:", summary.unused),
+        ("Celkem k úhradě:", summary.premium - summary.unused),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let baseline = top - 21.0 - index as f32 * 6.0;
+        layer.use_text(*label, 10.0, Mm(198.0), Mm(baseline), regular);
+        let value = format!("{},00 Kč", access_number(*value));
+        let value_x = 289.0 - estimated_text_width(&value, 10.0);
+        layer.set_fill_color(Color::Rgb(Rgb::new(0.6, 0.0, 0.0, None)));
+        layer.use_text(&value, 10.0, Mm(value_x), Mm(baseline), bold);
+        layer.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.65, None)));
+    }
+
+    let source = image::load_from_memory(INSURER_SIGNATURE_STAMP)
+        .map_err(|_| "Razítko a podpis se nepodařilo načíst.".to_string())?;
+    Image::from_dynamic_image(&source).add_to_layer(
+        layer.clone(),
+        ImageTransform {
+            translate_x: Some(Mm(210.0)),
+            translate_y: Some(Mm((top - 99.0).max(14.0))),
+            dpi: Some(300.0),
+            ..Default::default()
+        },
+    );
+    Ok(())
+}
+
+fn access_number(value: i64) -> String {
+    let digits = value.abs().to_string();
+    let mut out = String::new();
+    for (i, ch) in digits.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            out.push(' ');
+        }
+        out.push(ch);
+    }
+    let mut value: String = out.chars().rev().collect();
+    if value.starts_with('-') {
+        value.insert(0, '-');
+    }
+    value
+}
+
+fn estimated_text_width(value: &str, font_size: f32) -> f32 {
+    value
+        .chars()
+        .map(|character| match character {
+            ' ' => 0.25,
+            'i' | 'l' | 'I' | '.' | ',' | ':' => 0.24,
+            'm' | 'w' | 'M' | 'W' => 0.82,
+            _ => 0.60,
+        })
+        .sum::<f32>()
+        * font_size
+        * 0.352_778
+}
+
+fn fit_text(value: &str, max_width: f32, font_size: f32) -> String {
+    if estimated_text_width(value, font_size) <= max_width {
+        return value.to_string();
+    }
+    let suffix = "...";
+    let mut fitted = String::new();
+    for character in value.chars() {
+        let candidate = format!("{fitted}{character}{suffix}");
+        if estimated_text_width(&candidate, font_size) > max_width {
+            break;
+        }
+        fitted.push(character);
+    }
+    format!("{fitted}{suffix}")
+}
+fn access_date(value: &str) -> String {
+    chrono::NaiveDate::parse_from_str(value.get(..10).unwrap_or(value), "%Y-%m-%d")
+        .map(|d| d.format("%d.%m.%Y").to_string())
+        .unwrap_or_else(|_| value.to_string())
+}
+fn footer(
+    layer: &printpdf::PdfLayerReference,
+    page: usize,
+    pages: usize,
+    font: &printpdf::IndirectFontRef,
+) {
+    layer.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.65, None)));
+    let date = chrono::Local::now().date_naive();
+    let weekdays = [
+        "pondělí",
+        "terý",
+        "středa",
+        "čtvrtek",
+        "pátek",
+        "sobota",
+        "neděle",
+    ];
+    let months = [
+        "ledna",
+        "února",
+        "března",
+        "dubna",
+        "května",
+        "června",
+        "července",
+        "srpna",
+        "září",
+        "října",
+        "listopadu",
+        "prosince",
+    ];
+    let stamp = format!(
+        "{} {}. {} {}",
+        weekdays[chrono::Datelike::weekday(&date).num_days_from_monday() as usize],
+        chrono::Datelike::day(&date),
+        months[chrono::Datelike::month0(&date) as usize],
+        chrono::Datelike::year(&date)
+    );
+    layer.use_text(stamp, 6.5, Mm(10.0), Mm(14.0), font);
+    layer.use_text(
+        format!("Strana {page} z {pages}"),
+        6.5,
+        Mm(260.0),
+        Mm(14.0),
+        font,
+    );
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -675,6 +1309,150 @@ mod tests {
         };
         pdf(&report, &destination).unwrap();
         assert!(std::fs::metadata(destination).unwrap().len() > 1_000);
+    }
+
+    #[test]
+    fn insurer_overview_pdf_keeps_all_750_rows_and_paginates() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = std::env::var_os("FED_PDF_QA_DIR")
+            .map(std::path::PathBuf::from)
+            .map(|path| path.join("Prehled_pro_pojistovnu_2027.pdf"))
+            .unwrap_or_else(|| directory.path().join("Prehled_pro_pojistovnu_2027.pdf"));
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let rows = (1..=750)
+            .map(|sequence| InsurerPdfRow {
+                sequence,
+                registration_number: sequence.to_string(),
+                insured: if sequence % 37 == 0 {
+                    format!("Mgr. Dlouhopříjmeníová Alexandra {sequence}")
+                } else if sequence % 11 == 0 {
+                    format!("Šťastný Jiří {sequence}")
+                } else {
+                    format!("Novák Jan {sequence}")
+                },
+                personal_id: "800101/0000".into(),
+                insurance_from: "2027-01-01".into(),
+                insurance_to: "2027-12-31".into(),
+                termination: String::new(),
+                premium: if sequence % 17 == 0 { 12_345 } else { 700 },
+                unused_premium: if sequence % 41 == 0 { 1_250 } else { 0 },
+                annual_limit: if sequence % 13 == 0 { 600_000 } else { 200_000 },
+                category: if sequence % 13 == 0 {
+                    "C".into()
+                } else {
+                    "B".into()
+                },
+                loss: sequence % 2 == 0 || sequence % 37 == 0,
+                note: if sequence % 37 == 0 {
+                    "Poj. na ztrátu; delší testovací poznámka".into()
+                } else if sequence % 2 == 0 {
+                    "Poj. na ztrátu".into()
+                } else {
+                    String::new()
+                },
+            })
+            .collect();
+        insurer_overview_pdf(
+            &InsurerPdf {
+                policyholder: "Federace vlakových čet".into(),
+                contract_number: "650 12 00002".into(),
+                broker: "Abaccus finance s.r.o.".into(),
+                insurance_year: 2027,
+                rows,
+            },
+            &destination,
+        )
+        .unwrap();
+        let document = lopdf::Document::load(&destination).unwrap();
+        assert_eq!(document.get_pages().len(), 20);
+        assert!(std::fs::metadata(destination).unwrap().len() > 10_000);
+    }
+
+    #[test]
+    fn insurer_overview_summary_is_data_driven_and_paginates_safely() {
+        let row =
+            |sequence: usize, limit: i64, category: &str, loss: bool, premium: i64| InsurerPdfRow {
+                sequence,
+                registration_number: (10_000 + sequence).to_string(),
+                insured: format!("Testovací člen {sequence}"),
+                personal_id: "800101/0000".into(),
+                insurance_from: "2026-04-01".into(),
+                insurance_to: "2026-12-31".into(),
+                termination: String::new(),
+                premium,
+                unused_premium: 0,
+                annual_limit: limit,
+                category: category.into(),
+                loss,
+                note: if loss {
+                    "Poj. na ztrátu".into()
+                } else {
+                    String::new()
+                },
+            };
+        let rows = vec![
+            row(1, 280_000, "B", true, 613),
+            row(2, 240_000, "B", true, 708),
+            row(3, 240_000, "B", true, 531),
+        ];
+        let report = InsurerPdf {
+            policyholder: "Federace vlakových čet".into(),
+            contract_number: "650 12 00002".into(),
+            broker: "Abaccus finance s.r.o.".into(),
+            insurance_year: 2026,
+            rows,
+        };
+        let summary = insurer_summary(&report).unwrap();
+        assert_eq!(summary.counts.values().sum::<usize>(), 3);
+        assert_eq!(summary.counts[&(240_000, "B".into(), true)], 2);
+        assert_eq!(summary.counts[&(280_000, "B".into(), true)], 1);
+        assert_eq!(summary.premium, 1_852);
+        assert_eq!(summary.unused, 0);
+
+        let directory = tempfile::tempdir().unwrap();
+        let qa_directory = std::env::var_os("FED_PDF_QA_DIR").map(std::path::PathBuf::from);
+        let three_path = qa_directory
+            .as_ref()
+            .map(|path| path.join("Prehled_pro_pojistovnu_2026_3_clenove.pdf"))
+            .unwrap_or_else(|| directory.path().join("three.pdf"));
+        insurer_overview_pdf(&report, &three_path).unwrap();
+        assert_eq!(
+            lopdf::Document::load(&three_path)
+                .unwrap()
+                .get_pages()
+                .len(),
+            1
+        );
+
+        let thirty_rows = (1..=30)
+            .map(|sequence| row(sequence, 240_000, "B", sequence % 2 == 0, 700))
+            .collect();
+        let thirty_report = InsurerPdf {
+            rows: thirty_rows,
+            ..report
+        };
+        let thirty_path = qa_directory
+            .as_ref()
+            .map(|path| path.join("Prehled_pro_pojistovnu_2026_30_clenu.pdf"))
+            .unwrap_or_else(|| directory.path().join("thirty.pdf"));
+        insurer_overview_pdf(&thirty_report, &thirty_path).unwrap();
+        assert_eq!(
+            lopdf::Document::load(&thirty_path)
+                .unwrap()
+                .get_pages()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn insurer_cell_text_respects_inner_width_including_ellipsis() {
+        for width in [8.5, 16.0, 33.5] {
+            let shown = fit_text("Poj. na ztrátu; mimořádně dlouhá poznámka", width, 6.7);
+            assert!(estimated_text_width(&shown, 6.7) <= width);
+        }
     }
 
     #[test]

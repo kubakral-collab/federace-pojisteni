@@ -1,13 +1,14 @@
 {
   "name": "pojisteni-klienti",
   "private": true,
-  "version": "0.26.0",
+  "version": "0.26.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "test:ui-contract": "node scripts/verify-ui-smoke-contract.mjs",
-    "verify:version": "node scripts/verify-version.mjs",
+    "verify:version": "node scripts/verify-version.mjs && node scripts/verify-whats-new.mjs",
+    "test:whats-new": "node scripts/verify-whats-new.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
     "smoke": "tauri dev --config src-tauri/tauri.smoke.conf.json --features smoke-test"

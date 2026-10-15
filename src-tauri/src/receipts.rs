@@ -47,6 +47,7 @@ pub struct ReceiptSettings {
     pub email_body: String,
     pub policyholder: String,
     pub contract_number: String,
+    pub broker: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -103,6 +104,7 @@ pub fn ensure_schema(connection: &Connection) -> rusqlite::Result<()> {
             "TextEmailu" TEXT NOT NULL DEFAULT 'Přílohou zasíláme doklad o pojištění z odpovědnosti.',
             "Pojistnik" TEXT NOT NULL DEFAULT 'Federace vlakových čet - presidium',
             "CisloSmlouvy" TEXT NOT NULL DEFAULT '650 12 00002',
+            "Makler" TEXT NOT NULL DEFAULT 'Abaccus finance s.r.o.',
             "Aktualizovano" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         INSERT OR IGNORE INTO "NastaveniDokladu"("Id") VALUES(1);
@@ -142,8 +144,8 @@ pub fn ensure_schema(connection: &Connection) -> rusqlite::Result<()> {
 
 pub fn load_settings(connection: &Connection) -> Result<ReceiptSettings, String> {
     connection.query_row(
-        r#"SELECT "AutomatickeVytvareni","AutomatickeOdesilani","PredmetEmailu","TextEmailu","Pojistnik","CisloSmlouvy" FROM "NastaveniDokladu" WHERE "Id"=1"#,
-        [], |row| Ok(ReceiptSettings { automatic_creation: row.get::<_,i64>(0)? != 0, automatic_sending: row.get::<_,i64>(1)? != 0, email_subject: row.get(2)?, email_body: row.get(3)?, policyholder: row.get(4)?, contract_number: row.get(5)? })
+        r#"SELECT "AutomatickeVytvareni","AutomatickeOdesilani","PredmetEmailu","TextEmailu","Pojistnik","CisloSmlouvy","Makler" FROM "NastaveniDokladu" WHERE "Id"=1"#,
+        [], |row| Ok(ReceiptSettings { automatic_creation: row.get::<_,i64>(0)? != 0, automatic_sending: row.get::<_,i64>(1)? != 0, email_subject: row.get(2)?, email_body: row.get(3)?, policyholder: row.get(4)?, contract_number: row.get(5)?, broker: row.get(6)? })
     ).map_err(|_| "Nastavení dokladů se nepodařilo načíst.".to_string())
 }
 
@@ -151,8 +153,11 @@ pub fn save_settings(connection: &Connection, settings: &ReceiptSettings) -> Res
     if settings.contract_number.trim().is_empty() {
         return Err("Vyplňte číslo pojistné smlouvy.".into());
     }
-    connection.execute(r#"UPDATE "NastaveniDokladu" SET "AutomatickeVytvareni"=?1,"AutomatickeOdesilani"=?2,"PredmetEmailu"=?3,"TextEmailu"=?4,"Pojistnik"=?5,"CisloSmlouvy"=?6,"Aktualizovano"=CURRENT_TIMESTAMP WHERE "Id"=1"#,
-        params![settings.automatic_creation as i64,settings.automatic_sending as i64,settings.email_subject.trim(),settings.email_body.trim(),settings.policyholder.trim(),settings.contract_number.trim()])
+    if settings.broker.trim().is_empty() {
+        return Err("Vyplňte makléře.".into());
+    }
+    connection.execute(r#"UPDATE "NastaveniDokladu" SET "AutomatickeVytvareni"=?1,"AutomatickeOdesilani"=?2,"PredmetEmailu"=?3,"TextEmailu"=?4,"Pojistnik"=?5,"CisloSmlouvy"=?6,"Makler"=?7,"Aktualizovano"=CURRENT_TIMESTAMP WHERE "Id"=1"#,
+        params![settings.automatic_creation as i64,settings.automatic_sending as i64,settings.email_subject.trim(),settings.email_body.trim(),settings.policyholder.trim(),settings.contract_number.trim(),settings.broker.trim()])
         .map_err(|_| "Nastavení dokladů se nepodařilo uložit.".to_string())?;
     Ok(())
 }
@@ -913,6 +918,7 @@ mod tests {
             email_body: "Text".into(),
             policyholder: "Federace".into(),
             contract_number: "650".into(),
+            broker: "Abaccus finance s.r.o.".into(),
         };
         save_settings(&connection, &settings).unwrap();
         let loaded = load_settings(&connection).unwrap();

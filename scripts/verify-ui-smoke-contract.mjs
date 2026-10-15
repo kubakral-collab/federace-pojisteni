@@ -55,6 +55,12 @@ const requiredUiContracts = [
   'Aktivní pojistný rok',
   'Pojištění ukončeno',
   'insuranceTerminated',
+  'year-creation-dialog-backdrop',
+  'year-creation-dialog',
+  'shouldShowWhatsNew(version, readLastSeenWhatsNewVersion())',
+  'whatsNewForVersion(version)',
+  'confirmWhatsNewVersion(startupStatus.applicationVersion)',
+  '>Rozumím</button>',
 ];
 
 const missing = requiredUiContracts.filter((contract) => !app.includes(contract));
@@ -87,12 +93,34 @@ for (const contract of ["100", "110", "125", "150", "localStorage", 'dataset.fon
 for (const contract of ["zoom: var(--ui-scale)", "overflow-y: auto", ".font-size-preview", 'html[data-font-scale="150"]', ".dashboard-grid", "@media print", "zoom: 1"]) {
   if (!css.includes(contract)) missing.push(`font scale CSS: ${contract}`);
 }
+for (const contract of [".year-creation-dialog-backdrop", "background: rgb(9 24 44 / 72%)", ".year-creation-dialog", "background: #fff", "flex-wrap: wrap"]) {
+  if (!css.includes(contract)) missing.push(`year creation dialog CSS: ${contract}`);
+}
+for (const contract of [".registration-number-options", "grid-template-columns:repeat(auto-fit", 'html[data-font-scale="150"] .registration-number-options', ".registration-number-options>label.selected"]) {
+  if (!css.includes(contract)) missing.push(`registration number compact CSS: ${contract}`);
+}
+for (const contract of [".whats-new-backdrop", "background: rgb(9 24 44 / 76%)", ".whats-new-dialog", "background: #fff", "overflow-y: auto", 'html[data-font-scale="150"] .whats-new-dialog']) {
+  if (!css.includes(contract)) missing.push(`what's new CSS: ${contract}`);
+}
+if ((app.match(/<RegistrationNumberPicker /g) ?? []).length !== 2) missing.push("shared registration number picker must be used by both creation flows");
+for (const forbidden of [
+  "Jednoznačně předvyplněno z existujících dat.",
+  "Vazba není jednoznačná; zadejte podle současných dat.",
+  "neměnný PDF snapshot",
+  "bude doplněno v budoucím sprintu",
+  "převzaty z ověřené Access předlohy",
+]) {
+  if (app.includes(forbidden)) missing.push(`developer-facing UI text: ${forbidden}`);
+}
+for (const help of ["Kód OC doplňte ručně.", "Tyto interní údaje se na přihlášku netisknou.", "Zvolte maximální výši pojistného krytí."]) {
+  if (!app.includes(help)) missing.push(`user guidance: ${help}`);
+}
 if (app.includes('"export_blank_application"') || backend.includes("fn export_blank_application(")) {
   missing.push("legacy blank-application Save dialog flow is still present");
 }
 const navigationBlock = app.slice(app.indexOf("const navigation:"), app.indexOf("return (", app.indexOf("const navigation:")));
 if (navigationBlock.includes('label: "Historická data"')) missing.push("Historická data remain visible in navigation");
-if (packageJson.version !== "0.26.0") missing.push("package version 0.26.0");
+if (packageJson.version !== "0.26.1") missing.push("package version 0.26.1");
 if (!defaultCapability.includes('"core:window:allow-close"')) missing.push("member detail native window close permission");
 if (!defaultCapability.includes('"core:window:allow-destroy"')) missing.push("member detail native window destroy permission");
 if (!app.includes("getCurrentWindow().destroy()")) missing.push("member detail native window definitive leave");

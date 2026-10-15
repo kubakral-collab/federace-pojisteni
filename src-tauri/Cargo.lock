@@ -2989,7 +2989,7 @@ dependencies = [
 
 [[package]]
 name = "pojisteni-klienti"
-version = "0.26.0"
+version = "0.26.1"
 dependencies = [
  "argon2",
  "chrono",

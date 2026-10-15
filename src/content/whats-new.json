@@ -1,0 +1,24 @@
+{
+  "0.26.1": {
+    "title": "Co je nového ve verzi 0.26.1",
+    "intro": "Tato aktualizace zpřehledňuje každodenní práci a opravuje několik důležitých detailů.",
+    "sections": [
+      {
+        "title": "Vylepšení",
+        "items": [
+          "Přehlednější potvrzení při zakládání nového pojistného roku.",
+          "Kompaktnější výběr dalšího nebo volného evidenčního čísla.",
+          "Přehled pro pojišťovnu v PDF: Přehled pojištěnců nyní můžete vytvořit také jako PDF dokument podle používaného vzoru pojišťovny.",
+          "Srozumitelnější texty a nápovědy v aplikaci.",
+          "Po aktualizaci se při prvním přihlášení zobrazí přehled hlavních změn nové verze."
+        ]
+      },
+      {
+        "title": "Opravy",
+        "items": [
+          "Změna sazby pojistného se nyní promítne do odpovídajících pojištěnců stejného pojistného roku, aniž změní dřívější roky."
+        ]
+      }
+    ]
+  }
+}

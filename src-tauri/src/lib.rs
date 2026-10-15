@@ -204,6 +204,7 @@ struct MemberRow {
     email: Option<String>,
     phone: Option<String>,
     insurance_terminated: bool,
+    unused_premium: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -445,7 +446,8 @@ const MEMBER_SELECT: &str = r#"SELECT
     CAST("ZO" AS TEXT),
     CAST("e-mail" AS TEXT),
     CAST("Telefon" AS TEXT),
-    COALESCE("PojisteniUkonceno", 0)
+    COALESCE("PojisteniUkonceno", 0),
+    CAST("PojistNespotř" AS TEXT)
 FROM "Seznam""#;
 
 #[cfg(test)]
@@ -959,6 +961,7 @@ fn map_member(row: &Row<'_>) -> rusqlite::Result<MemberRow> {
         email: row.get(24)?,
         phone: row.get(25)?,
         insurance_terminated: row.get::<_, i64>(26)? != 0,
+        unused_premium: row.get(27)?,
     })
 }
 
@@ -2187,6 +2190,85 @@ fn insurer_overview_from_date(
 }
 
 #[tauri::command]
+fn export_insurer_overview_pdf(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    from_date: String,
+    expected_row_ids: Vec<i64>,
+) -> Result<Option<String>, String> {
+    authenticated_user(&state)?;
+    let date = NaiveDate::parse_from_str(from_date.trim(), "%Y-%m-%d")
+        .map_err(|_| "Zadejte platné datum.".to_string())?;
+    let connection = open_read_only(&working_database_path(&app)?)?;
+    let overview = insurer_overview_from_date(&connection, date)?;
+    let actual_ids = overview
+        .members
+        .iter()
+        .map(|member| member.row_id)
+        .collect::<Vec<_>>();
+    if actual_ids != expected_row_ids {
+        return Err("Data přehledu se mezitím změnila. Načtěte přehled znovu.".into());
+    }
+    let settings = receipts::load_settings(&connection)?;
+    let destination = rfd::FileDialog::new()
+        .set_file_name(format!(
+            "Prehled_pro_pojistovnu_{}.pdf",
+            overview.insurance_year
+        ))
+        .add_filter("PDF", &["pdf"])
+        .save_file();
+    let Some(destination) = destination else {
+        return Ok(None);
+    };
+    let rows = overview
+        .members
+        .iter()
+        .enumerate()
+        .map(|(index, member)| {
+            let loss = member.loss.as_deref().map(|v| v != "0").unwrap_or(false);
+            reports::InsurerPdfRow {
+                sequence: index + 1,
+                registration_number: member.registration_number.clone().unwrap_or_default(),
+                insured: member.insured.clone(),
+                personal_id: member.personal_id.clone().unwrap_or_default(),
+                insurance_from: member.insurance_from.clone().unwrap_or_default(),
+                insurance_to: member.insurance_to.clone().unwrap_or_default(),
+                termination: member.actual_termination.clone().unwrap_or_default(),
+                premium: number(&member.premium),
+                unused_premium: number(&member.unused_premium),
+                annual_limit: number(&member.annual_premium),
+                category: member.category.clone().unwrap_or_default(),
+                loss,
+                note: if loss {
+                    format!(
+                        "Poj. na ztrátu{}",
+                        member
+                            .note
+                            .as_deref()
+                            .filter(|v| !v.trim().is_empty())
+                            .map(|v| format!("; {v}"))
+                            .unwrap_or_default()
+                    )
+                } else {
+                    member.note.clone().unwrap_or_default()
+                },
+            }
+        })
+        .collect();
+    reports::insurer_overview_pdf(
+        &reports::InsurerPdf {
+            policyholder: settings.policyholder,
+            contract_number: settings.contract_number,
+            broker: settings.broker,
+            insurance_year: overview.insurance_year,
+            rows,
+        },
+        &destination,
+    )?;
+    Ok(Some(destination.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
 fn list_tariff_rates(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -2204,10 +2286,165 @@ fn save_tariff_rate(
     state: State<'_, AppState>,
     rate: tariffs::TariffRateInput,
 ) -> Result<i64, String> {
-    require_admin(&state)?;
+    let user = require_admin(&state)?;
     let path = working_database_path(&app)?;
-    let connection = open_write(&path)?;
-    tariffs::save(&connection, rate)
+    let mut connection = open_write(&path)?;
+    let propagation = tariff_propagation_plan(&connection, &rate)?;
+    if propagation.record_count > 0 {
+        backup_before_tariff_change(&path, propagation.insurance_year)?;
+    }
+    let (id, _) = save_tariff_rate_with_propagation(&mut connection, &user, rate, propagation)?;
+    Ok(id)
+}
+
+#[derive(Debug, PartialEq)]
+struct TariffPropagationPlan {
+    insurance_year: i32,
+    record_count: i64,
+}
+
+fn tariff_propagation_plan(
+    connection: &Connection,
+    rate: &tariffs::TariffRateInput,
+) -> Result<TariffPropagationPlan, String> {
+    let insurance_year = NaiveDate::parse_from_str(rate.valid_from.trim(), "%Y-%m-%d")
+        .map_err(|_| "Zkontrolujte datum platnosti od.".to_string())?
+        .year();
+    let parameters = params![
+        insurance_year,
+        rate.category.trim(),
+        i64::from(rate.loss_insurance),
+        rate.insured_amount
+    ];
+    let record_count: i64 = connection
+        .query_row(
+            r#"SELECT COUNT(*) FROM "Seznam"
+               WHERE pojisteni_rok("PojištěníOd")=?1
+                 AND "Kategorie"=?2
+                 AND CASE WHEN COALESCE("Ztráta",0)<>0 THEN 1 ELSE 0 END=?3
+                 AND CAST("RočPojistné" AS INTEGER)=?4"#,
+            parameters,
+            |row| row.get(0),
+        )
+        .map_err(|_| "Dotčené pojistné záznamy se nepodařilo ověřit.".to_string())?;
+
+    if record_count > 0 {
+        let conflicts: i64 = connection
+            .query_row(
+                r#"SELECT
+                     (SELECT COUNT(*) FROM "Prihlasky" document
+                       JOIN "Seznam" member ON member.rowid=document."PojistnyZaznamRowId"
+                      WHERE pojisteni_rok(member."PojištěníOd")=?1 AND member."Kategorie"=?2
+                        AND CASE WHEN COALESCE(member."Ztráta",0)<>0 THEN 1 ELSE 0 END=?3
+                        AND CAST(member."RočPojistné" AS INTEGER)=?4)
+                   + (SELECT COUNT(*) FROM "DokladyOUhrade" document
+                       JOIN "Seznam" member ON member.rowid=document."PojistnyZaznamRowId"
+                      WHERE pojisteni_rok(member."PojištěníOd")=?1 AND member."Kategorie"=?2
+                        AND CASE WHEN COALESCE(member."Ztráta",0)<>0 THEN 1 ELSE 0 END=?3
+                        AND CAST(member."RočPojistné" AS INTEGER)=?4)
+                   + (SELECT COUNT(*) FROM "ClenskeDoklady" document
+                       JOIN "Seznam" member ON member.rowid=document."PojistnyZaznamRowId"
+                      WHERE pojisteni_rok(member."PojištěníOd")=?1 AND member."Kategorie"=?2
+                        AND CASE WHEN COALESCE(member."Ztráta",0)<>0 THEN 1 ELSE 0 END=?3
+                        AND CAST(member."RočPojistné" AS INTEGER)=?4)
+                   + (SELECT COUNT(*) FROM "PrikazyKUhrade" document
+                       JOIN "Seznam" member ON member.rowid=document."PojistnyZaznamRowId"
+                      WHERE pojisteni_rok(member."PojištěníOd")=?1 AND member."Kategorie"=?2
+                        AND CASE WHEN COALESCE(member."Ztráta",0)<>0 THEN 1 ELSE 0 END=?3
+                        AND CAST(member."RočPojistné" AS INTEGER)=?4)"#,
+                params![
+                    insurance_year,
+                    rate.category.trim(),
+                    i64::from(rate.loss_insurance),
+                    rate.insured_amount
+                ],
+                |row| row.get(0),
+            )
+            .map_err(|_| "Vystavené dokumenty se nepodařilo ověřit.".to_string())?;
+        if conflicts > 0 {
+            return Err(format!(
+                "Sazbu nelze změnit: {conflicts} dotčených záznamů roku {insurance_year} má již vystavený nebo neměnný dokument."
+            ));
+        }
+    }
+    Ok(TariffPropagationPlan {
+        insurance_year,
+        record_count,
+    })
+}
+
+fn backup_before_tariff_change(database_path: &Path, insurance_year: i32) -> Result<(), String> {
+    let directory = database_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("backups");
+    fs::create_dir_all(&directory)
+        .map_err(|_| "Zálohu před změnou sazby se nepodařilo vytvořit.".to_string())?;
+    let prefix = format!("PredZmenouSazby_{insurance_year}");
+    let mut destination = directory.join(database_backup::default_file_name(&prefix));
+    let mut suffix = 2;
+    while destination.exists() {
+        destination = directory.join(
+            database_backup::default_file_name(&prefix)
+                .replace(".fvcbackup", &format!("_{suffix}.fvcbackup")),
+        );
+        suffix += 1;
+    }
+    database_backup::create(database_path, &destination, false)
+        .map_err(|error| format!("Zálohu před změnou sazby se nepodařilo vytvořit: {error}"))?;
+    database_backup::inspect(&destination, migrations::DB_SCHEMA_VERSION)
+        .map_err(|error| format!("Zálohu před změnou sazby se nepodařilo ověřit: {error}"))?;
+    Ok(())
+}
+
+fn save_tariff_rate_with_propagation(
+    connection: &mut Connection,
+    user: &str,
+    rate: tariffs::TariffRateInput,
+    plan: TariffPropagationPlan,
+) -> Result<(i64, i64), String> {
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
+    let current_plan = tariff_propagation_plan(&transaction, &rate)?;
+    if current_plan != plan {
+        return Err("Počet nebo stav dotčených záznamů se během ukládání změnil.".into());
+    }
+    let id = tariffs::save(&transaction, rate.clone())?;
+    let updated = transaction
+        .execute(
+            r#"UPDATE "Seznam" SET "PojistnáČástka"=?1
+               WHERE pojisteni_rok("PojištěníOd")=?2
+                 AND "Kategorie"=?3
+                 AND CASE WHEN COALESCE("Ztráta",0)<>0 THEN 1 ELSE 0 END=?4
+                 AND CAST("RočPojistné" AS INTEGER)=?5"#,
+            params![
+                rate.annual_premium,
+                plan.insurance_year,
+                rate.category.trim(),
+                i64::from(rate.loss_insurance),
+                rate.insured_amount
+            ],
+        )
+        .map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())? as i64;
+    if updated != plan.record_count {
+        return Err("Počet aktualizovaných pojistných záznamů se během ukládání změnil.".into());
+    }
+    transaction
+        .execute(
+            r#"INSERT INTO "AuditLog"
+               ("DatumČas", "Uživatel", "Operace", "IdentifikátorPojištěnce", "Výsledek")
+               VALUES (datetime('now'), ?1, 'ZMĚNA SAZBY', ?2, 'OK')"#,
+            params![
+                user,
+                format!("rok={};zaznamu={updated}", plan.insurance_year)
+            ],
+        )
+        .map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
+    transaction
+        .commit()
+        .map_err(|_| FRIENDLY_DATABASE_ERROR.to_string())?;
+    Ok((id, updated))
 }
 
 fn number(value: &Option<String>) -> i64 {
@@ -3638,6 +3875,7 @@ pub fn run() {
             list_legacy_table,
             get_dashboard,
             get_insurer_overview,
+            export_insurer_overview_pdf,
             list_tariff_rates,
             save_tariff_rate,
             get_payment_settings,
@@ -4673,7 +4911,7 @@ mod tests {
     }
 
     #[test]
-    fn tariff_rates_are_date_bound_non_overlapping_and_preserve_history() {
+    fn tariff_change_propagates_only_to_matching_records_in_the_same_insurance_year() {
         let directory = std::env::temp_dir().join(format!(
             "pojisteni-tariff-test-{}-{}",
             std::process::id(),
@@ -4685,12 +4923,31 @@ mod tests {
         fs::create_dir_all(&directory).unwrap();
         let database = directory.join(DATABASE_FILE);
         create_synthetic_database(&database);
-        let connection = open_write(&database).unwrap();
+        let mut connection = open_write(&database).unwrap();
         let history_before: (i64, i64) = connection
             .query_row(
-                r#"SELECT COUNT(*), SUM(COALESCE("PojistnáČástka", 0)) FROM "Seznam""#,
+                r#"SELECT COUNT(*), SUM(COALESCE("PojistnáČástka", 0)) FROM "Seznam"
+                   WHERE pojisteni_rok("PojištěníOd")=2026"#,
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        connection.execute_batch(
+            r#"WITH RECURSIVE numbers(value) AS (SELECT 1 UNION ALL SELECT value+1 FROM numbers WHERE value<31)
+               INSERT INTO "Seznam"("Identifikátor","PojištěníOd","PojištěníDo","RočPojistné","PojistnáČástka","Kategorie","Ztráta","SkutÚhrada","Tisk")
+               SELECT 990100+value,'2027-01-01','2027-12-31',200000,600,'B',0,CASE WHEN value=1 THEN 600 ELSE 0 END,0 FROM numbers;
+               INSERT INTO "Seznam"("Identifikátor","PojištěníOd","PojištěníDo","RočPojistné","PojistnáČástka","Kategorie","Ztráta","SkutÚhrada","Tisk") VALUES
+               (990001,'2027-01-01','2027-12-31',200000,950,'A',0,0,0),
+               (990002,'2027-01-01','2027-12-31',240000,536,'B',0,0,0),
+               (990003,'2027-01-01','2027-12-31',200000,594,'B',-1,0,0);"#,
+        ).unwrap();
+        let paid_before: i64 = connection
+            .query_row(
+                r#"SELECT SUM(COALESCE("SkutÚhrada",0)) FROM "Seznam"
+                   WHERE pojisteni_rok("PojištěníOd")=2027 AND "Kategorie"='B'
+                     AND COALESCE("Ztráta",0)=0 AND "RočPojistné"=200000"#,
+                [],
+                |row| row.get(0),
             )
             .unwrap();
         tariffs::ensure_schema(&connection).unwrap();
@@ -4704,63 +4961,108 @@ mod tests {
                     && rate.annual_premium == 495
             })
             .unwrap();
-        tariffs::save(
-            &connection,
-            tariffs::TariffRateInput {
-                id: Some(original.id),
-                insured_amount: original.insured_amount,
-                category: original.category,
-                loss_insurance: original.loss_insurance,
-                annual_premium: original.annual_premium,
-                valid_from: original.valid_from,
-                valid_to: Some("2026-12-31".into()),
-                active: true,
-                note: original.note,
-            },
-        )
-        .unwrap();
-        tariffs::save(
-            &connection,
-            tariffs::TariffRateInput {
-                id: None,
-                insured_amount: 200_000,
-                category: "B".into(),
-                loss_insurance: false,
-                annual_premium: 520,
-                valid_from: "2027-01-01".into(),
-                valid_to: None,
-                active: true,
-                note: Some("Sazba 2027".into()),
-            },
-        )
-        .unwrap();
+        let input = tariffs::TariffRateInput {
+            id: Some(original.id),
+            insured_amount: 200_000,
+            category: "B".into(),
+            loss_insurance: false,
+            annual_premium: 700,
+            valid_from: "2027-01-01".into(),
+            valid_to: None,
+            active: true,
+            note: Some("Sazba 2027".into()),
+        };
+        let plan = tariff_propagation_plan(&connection, &input).unwrap();
         assert_eq!(
-            tariffs::calculate(
-                &connection,
-                "B",
-                false,
-                200_000,
-                NaiveDate::from_ymd_opt(2026, 6, 1).unwrap(),
-                12
-            )
+            plan,
+            TariffPropagationPlan {
+                insurance_year: 2027,
+                record_count: 31
+            }
+        );
+        backup_before_tariff_change(&database, 2027).unwrap();
+        let backup = fs::read_dir(directory.join("backups"))
             .unwrap()
-            .unwrap()
-            .premium,
-            495
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.extension().and_then(|value| value.to_str()) == Some("fvcbackup"))
+            .unwrap();
+        assert_eq!(
+            database_backup::inspect(&backup, migrations::DB_SCHEMA_VERSION)
+                .unwrap()
+                .schema_version,
+            migrations::DB_SCHEMA_VERSION
+        );
+        let (_, updated) =
+            save_tariff_rate_with_propagation(&mut connection, "Správce", input, plan).unwrap();
+        assert_eq!(updated, 31);
+        assert_eq!(
+            connection
+                .query_row(
+                    r#"SELECT COUNT(*) FROM "Seznam" WHERE "Identifikátor" IN (990001,990002,990003)
+                   AND "PojistnáČástka" IN (950,536,594)"#,
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            3
         );
         assert_eq!(
-            tariffs::calculate(
-                &connection,
-                "B",
-                false,
-                200_000,
-                NaiveDate::from_ymd_opt(2027, 6, 1).unwrap(),
-                12
+            connection
+                .query_row(
+                    r#"SELECT COUNT(*) FROM "Seznam"
+                   WHERE pojisteni_rok("PojištěníOd")=2027 AND "Kategorie"='B'
+                     AND COALESCE("Ztráta",0)=0 AND "RočPojistné"=200000
+                     AND "PojistnáČástka"=700"#,
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            31
+        );
+        let history_after: (i64, i64) = connection
+            .query_row(
+                r#"SELECT COUNT(*), SUM(COALESCE("PojistnáČástka", 0)) FROM "Seznam"
+                   WHERE pojisteni_rok("PojištěníOd")=2026"#,
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .unwrap()
-            .unwrap()
-            .premium,
-            520
+            .unwrap();
+        assert_eq!(history_after, history_before);
+        let paid_after: i64 = connection
+            .query_row(
+                r#"SELECT SUM(COALESCE("SkutÚhrada",0)) FROM "Seznam"
+                   WHERE pojisteni_rok("PojištěníOd")=2027 AND "Kategorie"='B'
+                     AND COALESCE("Ztráta",0)=0 AND "RočPojistné"=200000"#,
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(paid_after, paid_before);
+        assert_eq!(
+            connection
+                .query_row(
+                    r#"SELECT COUNT(*) FROM "Seznam"
+                   WHERE pojisteni_rok("PojištěníOd")=2027 AND "Kategorie"='B'
+                     AND COALESCE("Ztráta",0)=0 AND "RočPojistné"=200000
+                     AND MAX("PojistnáČástka"-"SkutÚhrada",0)=700"#,
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            30
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    r#"SELECT COUNT(*) FROM "Seznam"
+                   WHERE pojisteni_rok("PojištěníOd")=2027 AND "Kategorie"='B'
+                     AND COALESCE("Ztráta",0)=0 AND "RočPojistné"=200000
+                     AND MAX("PojistnáČástka"-"SkutÚhrada",0)=100"#,
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
         );
         assert!(tariffs::save(
             &connection,
@@ -4769,24 +5071,59 @@ mod tests {
                 insured_amount: 200_000,
                 category: "B".into(),
                 loss_insurance: false,
-                annual_premium: 530,
+                annual_premium: 710,
                 valid_from: "2027-06-01".into(),
                 valid_to: None,
                 active: true,
                 note: None,
-            },
+            }
         )
         .is_err());
-        let history_after: (i64, i64) = connection
-            .query_row(
-                r#"SELECT COUNT(*), SUM(COALESCE("PojistnáČástka", 0)) FROM "Seznam""#,
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(history_after, history_before);
         drop(connection);
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn tariff_change_is_blocked_when_matching_record_has_immutable_document() {
+        let (directory, database) = synthetic_database();
+        let connection = open_write(&database).unwrap();
+        tariffs::ensure_schema(&connection).unwrap();
+        let row_id: i64 = connection
+            .query_row(
+                r#"SELECT rowid FROM "Seznam" WHERE pojisteni_rok("PojištěníOd")=2026 LIMIT 1"#,
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        connection.execute(
+            r#"INSERT INTO "Prihlasky"("PojistnyZaznamRowId","IdentifikatorClena","DatumPrihlasky","PojisteniOd","Kategorie","Ztrata","RocniLimit","Pojistne","Pdf","Sha256")
+               VALUES(?1,1,'2025-12-01','2026-01-01','B',0,200000,495,X'25504446','hash')"#,
+            [row_id],
+        ).unwrap();
+        let original = tariffs::list(&connection)
+            .unwrap()
+            .into_iter()
+            .find(|rate| {
+                rate.insured_amount == 200_000 && rate.category == "B" && !rate.loss_insurance
+            })
+            .unwrap();
+        let result = tariff_propagation_plan(
+            &connection,
+            &tariffs::TariffRateInput {
+                id: Some(original.id),
+                insured_amount: 200_000,
+                category: "B".into(),
+                loss_insurance: false,
+                annual_premium: 520,
+                valid_from: "2026-01-01".into(),
+                valid_to: None,
+                active: true,
+                note: None,
+            },
+        );
+        assert!(result.unwrap_err().contains("neměnný dokument"));
+        drop(connection);
+        drop(directory);
     }
 
     #[test]
@@ -5097,6 +5434,16 @@ mod tests {
             );
             transaction.rollback().unwrap();
         }
+        connection
+            .execute(r#"INSERT INTO "Seznam" VALUES(3)"#, [])
+            .unwrap();
+        assert_eq!(
+            registration_number_options(&connection).unwrap(),
+            RegistrationNumberOptions {
+                next_number: 9,
+                free_numbers: vec![6, 7]
+            }
+        );
         connection.execute(r#"DELETE FROM "Seznam""#, []).unwrap();
         assert_eq!(
             registration_number_options(&connection).unwrap(),

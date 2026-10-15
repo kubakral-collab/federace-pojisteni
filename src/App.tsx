@@ -38,6 +38,7 @@ import {
 import "./App.css";
 import { SETTINGS_MODULES } from "./modules/settings";
 import { FONT_SCALE_OPTIONS, readFontScale, saveFontScale, type FontScale } from "./ui/fontScale";
+import { confirmWhatsNewVersion, readLastSeenWhatsNewVersion, shouldShowWhatsNew, whatsNewForVersion, type WhatsNewEntry } from "./ui/whatsNew";
 
 const UPDATE_CHECK_ENABLED_KEY = "pojisteni.updateCheckEnabled";
 const LAST_UPDATE_CHECK_KEY = "pojisteni.lastUpdateCheck";
@@ -196,7 +197,7 @@ type PaymentSettings = {
 };
 
 type EmailSettings = { server: string; port: number; username: string; senderEmail: string; encryption: string; credentialName: string; passwordConfigured: boolean; password?: string };
-type ReceiptSettings = { automaticCreation: boolean; automaticSending: boolean; emailSubject: string; emailBody: string; policyholder: string; contractNumber: string };
+type ReceiptSettings = { automaticCreation: boolean; automaticSending: boolean; emailSubject: string; emailBody: string; policyholder: string; contractNumber: string; broker: string };
 type PaymentDocumentBasis = { memberRowId: number; memberName: string; registrationNumber: string; organizationCode: string; insuranceYear: number; prescribedPremium: number; paidAmount: number; paymentDates: string[]; contractNumber: string; insuranceStatus: string; lossInsurance: boolean; certificateReady: boolean };
 type BatchCertificateFilter = { insuranceYear?: number; paidFrom: string; organizationCode: string; organization: string };
 type BatchCertificateResult = { selected: number; created: number; existing: number; skipped: number; errors: string[]; receiptIds: number[] };
@@ -784,10 +785,13 @@ type ShellProps = {
   backupBusy: boolean;
   onCreateBackup: () => void;
   onRestoreBackup: () => void;
+  whatsNew: WhatsNewEntry | null;
+  whatsNewError: string;
+  onConfirmWhatsNew: () => void;
   children: React.ReactNode;
 };
 
-function Shell({ active, user, onNavigate, onLogout, updater, backupBusy, onCreateBackup, onRestoreBackup, children }: ShellProps) {
+function Shell({ active, user, onNavigate, onLogout, updater, backupBusy, onCreateBackup, onRestoreBackup, whatsNew, whatsNewError, onConfirmWhatsNew, children }: ShellProps) {
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const navigation: Array<{
     screen: Exclude<Screen, "Vstup">;
@@ -855,7 +859,17 @@ function Shell({ active, user, onNavigate, onLogout, updater, backupBusy, onCrea
         </div>
       </aside>
       <section className="content-area">{children}</section>
-      {updater.available && (
+      {whatsNew && (
+        <div className="whats-new-backdrop" role="presentation">
+          <section className="whats-new-dialog" role="dialog" aria-modal="true" aria-labelledby="whats-new-title">
+            <header><small>Aktualizace dokončena</small><h2 id="whats-new-title">{whatsNew.title}</h2><p>{whatsNew.intro}</p></header>
+            <div className="whats-new-content">{whatsNew.sections.map(section=><section key={section.title}><h3>{section.title}</h3><ul>{section.items.map(item=><li key={item}>{item}</li>)}</ul></section>)}</div>
+            {whatsNewError && <div className="message error">{whatsNewError}</div>}
+            <footer><button className="primary" onClick={onConfirmWhatsNew}>Rozumím</button></footer>
+          </section>
+        </div>
+      )}
+      {!whatsNew && updater.available && (
         <div className="update-dialog-backdrop" role="presentation">
           <section className="update-dialog" role="dialog" aria-modal="true" aria-labelledby="update-dialog-title">
             <small>Aktualizace aplikace</small>
@@ -886,9 +900,10 @@ function Shell({ active, user, onNavigate, onLogout, updater, backupBusy, onCrea
 function RegistrationNumberPicker({options,mode,value,onChange}:{options:RegistrationNumberOptions;mode:RegistrationNumberMode;value:number;onChange:(mode:RegistrationNumberMode,value:number)=>void}) {
   const freeAvailable=options.freeNumbers.length>0;
   return <fieldset className="registration-number-picker"><legend>Evidenční číslo</legend>
-    <label><input type="radio" name="registration-number-mode" checked={mode==="next"} onChange={()=>onChange("next",options.nextNumber)}/><span><strong>Další číslo v řadě</strong><small>{options.nextNumber||"—"}</small></span></label>
-    <label className={!freeAvailable?"disabled":""}><input type="radio" name="registration-number-mode" checked={mode==="free"} disabled={!freeAvailable} onChange={()=>onChange("free",options.freeNumbers[0]??0)}/><span><strong>Použít volné evidenční číslo</strong>{!freeAvailable&&<small>Momentálně nejsou k dispozici žádná volná evidenční čísla.</small>}</span></label>
-    {mode==="free"&&freeAvailable&&<label className="registration-number-select">Volné číslo<select value={value} onChange={event=>onChange("free",Number(event.target.value))}>{options.freeNumbers.map(number=><option key={number} value={number}>{number}</option>)}</select></label>}
+    <div className="registration-number-options">
+      <label className={mode==="next"?"selected":""}><input type="radio" name="registration-number-mode" checked={mode==="next"} onChange={()=>onChange("next",options.nextNumber)}/><span>Další číslo v řadě: <strong>{options.nextNumber||"—"}</strong></span></label>
+      <label className={`${mode==="free"?"selected ":""}${!freeAvailable?"disabled":""}`}><input type="radio" name="registration-number-mode" checked={mode==="free"} disabled={!freeAvailable} onChange={()=>onChange("free",options.freeNumbers[0]??0)}/><span>Použít volné číslo:</span>{freeAvailable?<select aria-label="Volné evidenční číslo" value={mode==="free"?value:options.freeNumbers[0]} disabled={mode!=="free"} onChange={event=>onChange("free",Number(event.target.value))}>{options.freeNumbers.map(number=><option key={number} value={number}>{number}</option>)}</select>:<small>Momentálně nejsou k dispozici žádná volná evidenční čísla.</small>}</label>
+    </div>
   </fieldset>;
 }
 
@@ -981,6 +996,8 @@ export default function App() {
   const [updateProgress, setUpdateProgress] = useState<number | null>(null);
   const [updateMessage, setUpdateMessage] = useState("");
   const [updaterStatus, setUpdaterStatus] = useState("Dosud nezkontrolováno");
+  const [whatsNew, setWhatsNew] = useState<WhatsNewEntry | null>(null);
+  const [whatsNewError, setWhatsNewError] = useState("");
   const [backupBusy, setBackupBusy] = useState(false);
   const [backups, setBackups] = useState<BackupInfo[]>([]);
   const [backupsLoading, setBackupsLoading] = useState(false);
@@ -1196,6 +1213,17 @@ export default function App() {
     }
   }
 
+  function confirmWhatsNew() {
+    if (!startupStatus?.ready) return;
+    try {
+      confirmWhatsNewVersion(startupStatus.applicationVersion);
+      setWhatsNew(null);
+      setWhatsNewError("");
+    } catch {
+      setWhatsNewError("Potvrzení se nepodařilo uložit. Zkuste to prosím znovu.");
+    }
+  }
+
   const shellUpdater = {
     updater: {
       available: availableUpdate,
@@ -1213,6 +1241,9 @@ export default function App() {
     backupBusy,
     onCreateBackup: () => void createDatabaseBackup(),
     onRestoreBackup: () => void restoreDatabaseBackup(),
+    whatsNew,
+    whatsNewError,
+    onConfirmWhatsNew: confirmWhatsNew,
   };
 
   useEffect(() => {
@@ -1249,6 +1280,14 @@ export default function App() {
       setWorkingYear((current) => current && years.includes(current) ? current : years[years.length - 1] ?? null);
     }).catch((message) => setError(String(message)));
   }, [user]);
+
+  useEffect(() => {
+    if (!user || preview || memberDetailRowId || !startupStatus?.ready) return;
+    const version = startupStatus.applicationVersion;
+    if (!shouldShowWhatsNew(version, readLastSeenWhatsNewVersion())) return;
+    setWhatsNew(whatsNewForVersion(version));
+    setWhatsNewError("");
+  }, [user, startupStatus]);
 
   useEffect(() => {
     if (!workingYear) return;
@@ -1584,6 +1623,15 @@ export default function App() {
   function returnToMemberDetail() {
     if (claimFormDirty) { setUnsavedLeave({ save: saveClaim, leave: finishReturnToMemberDetail }); return; }
     finishReturnToMemberDetail();
+  }
+
+  async function exportInsurerOverviewPdf() {
+    if (!insurerOverview) return;
+    setInsurerLoading(true); setError("");
+    try {
+      const path = await invoke<string | null>("export_insurer_overview_pdf", { fromDate: insurerFromDate, expectedRowIds: insurerOverview.members.map(member => member.rowId) });
+      if (path) setNotice(`PDF bylo uloženo: ${path}`);
+    } catch (message) { setError(String(message)); } finally { setInsurerLoading(false); }
   }
 
   function finishReturnToMemberDetail() {
@@ -1992,7 +2040,7 @@ export default function App() {
   async function printCompletedApplication(path:string){setSaving(true);setError("");try{await openApplicationPrintDialog(path,false);setNotice("Byl otevřen systémový tiskový dialog přihlášky.");}catch(message){setError(String(message));}finally{setSaving(false)}}
   async function openApplication(){setError("");setNotice("");try{await prepareRegistrationNumber();const draft=emptyApplication();setApplicationForm(draft);setApplicationFormBaseline(draft);setApplicationStep(1);setApplicationResult(null);setScreen("Vyplnit přihlášku");}catch(message){setError(String(message));}}
   async function completeApplication():Promise<boolean>{setSaving(true);setError("");try{const result=await invoke<ApplicationResult>("complete_application",{application:{...applicationForm,email:optional(applicationForm.email),registrationNumber}});setApplicationResult(result);setApplicationFormBaseline(applicationForm);setNotice(`Člen byl založen s evidenčním číslem ${result.registrationNumber}.`);await invoke("open_generated_pdf",{path:result.pdfPath,folder:false});return true;}catch(message){setError(String(message));if(String(message).startsWith("Evidenční číslo "))await prepareRegistrationNumber();return false;}finally{setSaving(false)}}
-  async function saveApplicationSnapshot(applicationId:number){setSaving(true);setError("");try{const path=await invoke<string|null>("export_application_snapshot",{id:applicationId});if(path)setNotice(`Neměnná přihláška byla uložena: ${path}`);}catch(message){setError(String(message));}finally{setSaving(false)}}
+  async function saveApplicationSnapshot(applicationId:number){setSaving(true);setError("");try{const path=await invoke<string|null>("export_application_snapshot",{id:applicationId});if(path)setNotice(`Přihláška byla uložena: ${path}`);}catch(message){setError(String(message));}finally{setSaving(false)}}
 
   async function loadMembers(page = 1, search = activeSearch, filters = memberFilters, year = workingYear) {
     setMembersLoading(true);
@@ -2473,7 +2521,7 @@ export default function App() {
           {error && <div className="message error">{error}</div>}
           {notice && <div className="message success">{notice}</div>}
           <section className="agenda-workspace"><header className="member-payments-header"><div><small>Kontext celé aplikace</small><h2>Aktivní pojistný rok</h2></div>{role==="Správce"&&<button className="primary" disabled={saving || workingYears.length===0} onClick={()=>setYearCreationTarget((workingYears[workingYears.length-1] ?? dashboard?.activeInsuranceYear ?? new Date().getFullYear())+1)}>Založit nový pojistný rok</button>}</header><label>Aktivní pojistný rok<select value={workingYear ?? ""} onChange={(event)=>setWorkingYear(Number(event.target.value))}>{workingYears.map(year=><option key={year} value={year}>{year}</option>)}</select></label><p>Zvolený rok zůstává kontextem při přechodu mezi moduly. Přepnutí samo nemění ani nepřevádí data.</p></section>
-          {yearCreationTarget&&<div className="update-dialog-backdrop" role="presentation"><section className="update-dialog" role="dialog" aria-modal="true" aria-labelledby="new-year-title"><small>Hromadná databázová operace</small><h2 id="new-year-title">Založit pojistný rok {yearCreationTarget}?</h2><p>Odpovídající pojištěnci budou převedeni z roku {yearCreationTarget-1}. Původní rok, jeho platby a historické záznamy zůstanou zachované. Před převodem vznikne ověřená záloha.</p><footer className="form-actions"><button disabled={saving} onClick={()=>setYearCreationTarget(null)}>Zrušit</button><button className="primary" disabled={saving} onClick={()=>void prepareNextInsuranceYear()}>Založit pojistný rok</button></footer></section></div>}
+          {yearCreationTarget&&<div className="update-dialog-backdrop year-creation-dialog-backdrop" role="presentation"><section className="update-dialog year-creation-dialog" role="dialog" aria-modal="true" aria-labelledby="new-year-title"><small>Hromadná databázová operace</small><h2 id="new-year-title">Založit pojistný rok {yearCreationTarget}?</h2><p>Odpovídající pojištěnci budou převedeni z roku {yearCreationTarget-1}. Původní rok, jeho platby a historické záznamy zůstanou zachované. Před převodem vznikne ověřená záloha.</p><footer className="form-actions"><button disabled={saving} onClick={()=>setYearCreationTarget(null)}>Zrušit</button><button className="primary" disabled={saving} onClick={()=>void prepareNextInsuranceYear()}>Založit pojistný rok</button></footer></section></div>}
           <section className="dashboard-grid">
             <article><Archive /><small>Aktivní pojistný rok</small><strong>{workingYear ?? dashboard?.activeInsuranceYear ?? "—"}</strong></article>
             <article><Users /><small>Počet pojištěnců</small><strong>{dashboard ? new Intl.NumberFormat("cs-CZ").format(dashboard.memberCount) : "—"}</strong></article>
@@ -2594,6 +2642,7 @@ export default function App() {
             <button className="primary" disabled={insurerLoading || !insurerFromDate} onClick={() => void loadInsurerOverview()}>Zobrazit přehled</button>
           </section>
           {insurerOverview && <>
+            <div className="form-actions"><button className="primary" disabled={insurerLoading} onClick={() => void exportInsurerOverviewPdf()}><FileText /> Vygenerovat PDF pro pojišťovnu</button></div>
             <section className="stats-grid compact-stats">
               <article><span>Pojištění od data</span><strong>{displayDate(insurerFromDate)}</strong></article>
               <article><span>Počet záznamů</span><strong>{insurerOverview.members.length}</strong></article>
@@ -2766,7 +2815,7 @@ export default function App() {
                     <FileText /> Vytvořit PDF
                   </button>
                   <button className="action-neutral" disabled={paymentLoading || paymentDraft.validationErrors.length > 0} onClick={printPaymentOrder}><Printer /> Tisk</button>
-                  <button className="action-neutral" disabled title="Odesílání e-mailem bude doplněno v budoucím sprintu."><Mail /> Odeslat e-mailem</button>
+                  <button className="action-neutral" disabled title="Odesílání e-mailem zatím není dostupné."><Mail /> Odeslat e-mailem</button>
                   {lastPaymentPdf && <div className="generated-pdf-actions">
                     <button onClick={() => openPaymentPdf(false)}>Otevřít PDF</button>
                     <button onClick={() => openPaymentPdf(true)}>Otevřít složku</button>
@@ -2902,9 +2951,9 @@ export default function App() {
           <label className="checkbox wide"><input type="checkbox" checked={receiptSettings.automaticSending} onChange={(event) => setReceiptSettings({...receiptSettings,automaticSending:event.target.checked})}/>Automaticky odeslat doklad po úplné úhradě</label>
           <label>Pojistník<input value={receiptSettings.policyholder} onChange={(event) => setReceiptSettings({...receiptSettings,policyholder:event.target.value})}/></label>
           <label>Číslo smlouvy<input value={receiptSettings.contractNumber} onChange={(event) => setReceiptSettings({...receiptSettings,contractNumber:event.target.value})}/></label>
+          <label>Makléř<input value={receiptSettings.broker} onChange={(event) => setReceiptSettings({...receiptSettings,broker:event.target.value})}/></label>
           <label className="wide">Předmět e-mailu<input value={receiptSettings.emailSubject} onChange={(event) => setReceiptSettings({...receiptSettings,emailSubject:event.target.value})}/></label>
           <label className="wide">Text e-mailu<textarea value={receiptSettings.emailBody} onChange={(event) => setReceiptSettings({...receiptSettings,emailBody:event.target.value})}/></label>
-          <p className="wide settings-help">Loga, podpis a razítko jsou převzaty z ověřené Access předlohy a nejsou uživatelsky měněny.</p>
           <footer className="form-actions wide"><button className="primary" disabled={saving} onClick={saveReceiptSettings}><Save /> Uložit nastavení</button></footer>
         </section>}
       </div></Shell>;
@@ -3353,7 +3402,7 @@ export default function App() {
     const variant=applicationForm.category==="B"?"Standard":applicationForm.category==="A"?"Řidič":"Strojvedoucí";
     return <Shell {...shellUpdater} active="Pojištěnci" user={user} onNavigate={navigate} onLogout={leaveToLogin}><UnsavedChangesDialog request={unsavedLeave} busy={saving} close={()=>setUnsavedLeave(null)}/><main className="page application-page"><header><button className="back-link" onClick={()=>navigate("Pojištěnci")}><ArrowLeft/> Zpět</button><small>Nový pojištěnec</small><h1>Vyplnit přihlášku</h1><div className="application-steps"><span className={applicationStep===1?"active":""}>1 Osobní údaje a pojištění</span><span className={applicationStep===2?"active":""}>2 Zařazení pojištěnce</span><span className={applicationStep===3?"active":""}>3 Rekapitulace</span></div></header>
       {error&&<div className="message error">{error}</div>}{notice&&<div className="message success">{notice}</div>}
-      {applicationResult?<section className="application-summary"><h2>Přihláška je dokončena</h2><p>Člen i neměnný PDF snapshot byly uloženy společně.</p><dl><div><dt>Evidenční číslo</dt><dd>{applicationResult.registrationNumber}</dd></div><div><dt>Datum přihlášky</dt><dd>{displayDate(applicationResult.applicationDate)}</dd></div><div><dt>Pojištění od</dt><dd>{displayDate(applicationResult.insuranceFrom)}</dd></div></dl><div className="form-actions"><button className="primary" disabled={saving} onClick={()=>void printCompletedApplication(applicationResult.pdfPath)}><Printer/> Tisk</button><button onClick={()=>void invoke("open_generated_pdf",{path:applicationResult.pdfPath,folder:false})}><FileText/> Otevřít PDF</button><button disabled={saving} onClick={()=>void saveApplicationSnapshot(applicationResult.applicationId)}><Save/> Uložit PDF</button><button onClick={()=>setScreen("Pojištěnci")}>Hotovo</button></div></section>:
+      {applicationResult?<section className="application-summary"><h2>Přihláška je dokončena</h2><p>Člen i přihláška ve formátu PDF byly bezpečně uloženy.</p><dl><div><dt>Evidenční číslo</dt><dd>{applicationResult.registrationNumber}</dd></div><div><dt>Datum přihlášky</dt><dd>{displayDate(applicationResult.applicationDate)}</dd></div><div><dt>Pojištění od</dt><dd>{displayDate(applicationResult.insuranceFrom)}</dd></div></dl><div className="form-actions"><button className="primary" disabled={saving} onClick={()=>void printCompletedApplication(applicationResult.pdfPath)}><Printer/> Tisk</button><button onClick={()=>void invoke("open_generated_pdf",{path:applicationResult.pdfPath,folder:false})}><FileText/> Otevřít PDF</button><button disabled={saving} onClick={()=>void saveApplicationSnapshot(applicationResult.applicationId)}><Save/> Uložit PDF</button><button onClick={()=>setScreen("Pojištěnci")}>Hotovo</button></div></section>:
       applicationStep===1?<section className="application-form application-form-redesign">
         <section className="application-section" aria-labelledby="application-personal-title">
           <header className="application-section-heading"><div><small>Krok 1</small><h2 id="application-personal-title">Osobní údaje</h2></div><span>Povinná pole jsou označena *</span></header>
@@ -3383,7 +3432,7 @@ export default function App() {
         </fieldset>
         <footer className="application-navigation"><button type="button" onClick={()=>setScreen("Pojištěnci")}><ArrowLeft/> Zpět</button><button type="button" className="primary" onClick={()=>{setError("");if(!applicationForm.firstName||!applicationForm.lastName||!applicationForm.personalId||!applicationForm.address||!applicationForm.city||!applicationForm.postalCode){setError("Doplňte všechna povinná osobní pole.");return}if(!applicationOptions.annualAmounts.includes(applicationForm.annualAmount)){setError("Vyberte právě jeden roční limit.");return}setApplicationStep(2)}}>Pokračovat <ChevronRight/></button></footer>
       </section>:
-      applicationStep===2?<section className="application-form"><h2>Zařazení nového pojištěnce</h2><p className="muted">Tyto interní údaje se na přihlášku netisknou.</p><div className="application-grid"><label>Odborná příslušnost *<select value={applicationForm.affiliation} onChange={e=>setApplicationForm({...applicationForm,affiliation:e.target.value as "FVČ"|"FV",organization:"",code:""})}><option>FVČ</option><option>FV</option></select></label><label>Organizace / ZO *<select value={applicationForm.organization} onChange={e=>{const item=applicationOptions.organizations.find(x=>x.organization===e.target.value);setApplicationForm({...applicationForm,organization:e.target.value,code:item?.code??""})}}><option value=""/>{applicationOptions.organizations.map(item=><option key={item.organization}>{item.organization}</option>)}</select></label><label>KódOC *<input value={applicationForm.code} onChange={e=>setApplicationForm({...applicationForm,code:e.target.value})}/><small>{selectedOrganization?.code?"Jednoznačně předvyplněno z existujících dat.":"Vazba není jednoznačná; zadejte podle současných dat."}</small></label><div className="wide"><RegistrationNumberPicker options={registrationOptions} mode={registrationMode} value={registrationNumber} onChange={(mode,value)=>{setRegistrationMode(mode);setRegistrationNumber(value)}}/></div></div><footer className="form-actions"><button onClick={()=>setApplicationStep(1)}>Zpět</button><button className="primary" onClick={()=>{if(!applicationForm.organization||!applicationForm.code){setError("Doplňte organizaci a KódOC.");return}setError("");setApplicationStep(3)}}>Rekapitulace</button></footer></section>:
+      applicationStep===2?<section className="application-form"><h2>Zařazení nového pojištěnce</h2><p className="muted">Tyto interní údaje se na přihlášku netisknou.</p><div className="application-grid"><label>Odborná příslušnost *<select value={applicationForm.affiliation} onChange={e=>setApplicationForm({...applicationForm,affiliation:e.target.value as "FVČ"|"FV",organization:"",code:""})}><option>FVČ</option><option>FV</option></select></label><label>Organizace / ZO *<select value={applicationForm.organization} onChange={e=>{const item=applicationOptions.organizations.find(x=>x.organization===e.target.value);setApplicationForm({...applicationForm,organization:e.target.value,code:item?.code??""})}}><option value=""/>{applicationOptions.organizations.map(item=><option key={item.organization}>{item.organization}</option>)}</select></label><label>KódOC *<input value={applicationForm.code} onChange={e=>setApplicationForm({...applicationForm,code:e.target.value})}/>{!selectedOrganization?.code&&<small>Kód OC doplňte ručně.</small>}</label><div className="wide"><RegistrationNumberPicker options={registrationOptions} mode={registrationMode} value={registrationNumber} onChange={(mode,value)=>{setRegistrationMode(mode);setRegistrationNumber(value)}}/></div></div><footer className="form-actions"><button onClick={()=>setApplicationStep(1)}>Zpět</button><button className="primary" onClick={()=>{if(!applicationForm.organization||!applicationForm.code){setError("Doplňte organizaci a KódOC.");return}setError("");setApplicationStep(3)}}>Rekapitulace</button></footer></section>:
       <section className="application-summary"><h2>Rekapitulace</h2><dl><div><dt>Pojištěnec</dt><dd>{applicationForm.firstName} {applicationForm.lastName}</dd></div><div><dt>Rodné číslo</dt><dd>{applicationForm.personalId}</dd></div><div><dt>Adresa</dt><dd>{applicationForm.address}, {applicationForm.postalCode} {applicationForm.city}</dd></div><div><dt>Pojištění</dt><dd>{variant}{applicationForm.loss?" + ztráta":""}</dd></div><div><dt>Roční limit</dt><dd>{displayCurrency(applicationForm.annualAmount)}</dd></div><div><dt>Aktuální roční sazba</dt><dd>{displayCurrency(applicationTariff.premium)}</dd></div><div><dt>Pojištění od</dt><dd>{nextStart}</dd></div><div><dt>Evidenční číslo</dt><dd>{registrationNumber}</dd></div><div><dt>Interní zařazení</dt><dd>{applicationForm.affiliation} / {applicationForm.organization} / KódOC {applicationForm.code}</dd></div></dl><p className="muted">Interní zařazení nebude vytištěno. Podpis se doplní ručně na vytištěnou přihlášku.</p><footer className="form-actions"><button onClick={()=>setApplicationStep(2)}>Zpět</button><button className="primary" disabled={saving} onClick={()=>void completeApplication()}><Check/> Dokončit přihlášku</button></footer></section>}
     </main></Shell>;
   }
