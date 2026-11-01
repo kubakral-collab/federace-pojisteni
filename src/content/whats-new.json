@@ -1,4 +1,18 @@
 {
+  "0.27.0": {
+    "title": "Co je nového ve verzi 0.27.0",
+    "intro": "Tato aktualizace zpřehledňuje seznam pojistných událostí a opravuje filtrování přehledu pro pojišťovnu.",
+    "sections": [
+      {
+        "title": "Opravy",
+        "items": [
+          "Hlavní seznam pojistných událostí již neobsahuje sloupec Typ události. Informace zůstává dostupná v detailu.",
+          "Přehled pro pojišťovnu respektuje zadané počáteční datum a zahrnuje pouze pojištěnce s počátkem pojištění v tento den nebo později.",
+          "Po změně data je potřeba znovu zobrazit přehled. PDF i souhrnné počty a částky vycházejí ze stejného vyfiltrovaného seznamu."
+        ]
+      }
+    ]
+  },
   "0.26.1": {
     "title": "Co je nového ve verzi 0.26.1",
     "intro": "Tato aktualizace zpřehledňuje každodenní práci a opravuje několik důležitých detailů.",

@@ -2163,11 +2163,49 @@ fn get_insurer_overview(
     insurer_overview_from_date(&connection, from_date)
 }
 
+// PojištěníOd is a calendar date, including when legacy data carries a time.
+// Keep the recorded local day; converting an offset to UTC would move boundaries.
+fn insurer_calendar_date(value: &str) -> Option<NaiveDate> {
+    let value = value.trim();
+    ["%Y-%m-%d", "%d.%m.%Y", "%d. %m. %Y", "%d/%m/%Y"]
+        .iter()
+        .find_map(|format| NaiveDate::parse_from_str(value, format).ok())
+        .or_else(|| {
+            [
+                "%Y-%m-%d %H:%M:%S%.f",
+                "%Y-%m-%dT%H:%M:%S%.f",
+                "%d.%m.%Y %H:%M:%S",
+            ]
+            .iter()
+            .find_map(|format| NaiveDateTime::parse_from_str(value, format).ok())
+            .map(|date| date.date())
+        })
+        .or_else(|| {
+            DateTime::parse_from_rfc3339(value)
+                .ok()
+                .map(|date| date.date_naive())
+        })
+}
+
 fn insurer_overview_from_date(
     connection: &Connection,
     from_date: NaiveDate,
 ) -> Result<InsurerOverview, String> {
-    let sql = format!("{MEMBER_SELECT} WHERE date(\"PojištěníOd\") >= date(?1) ORDER BY date(\"PojištěníOd\"), CAST(\"EvČíslo\" AS INTEGER), \"Příjmení\"");
+    connection
+        .create_scalar_function(
+            "insurer_calendar_date",
+            1,
+            FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+            |context| {
+                let value: Option<String> = context.get(0)?;
+                Ok(value
+                    .as_deref()
+                    .and_then(insurer_calendar_date)
+                    .map(|date| date.format("%Y-%m-%d").to_string()))
+            },
+        )
+        .map_err(|_| "Přehled pro pojišťovnu se nepodařilo načíst.".to_string())?;
+    let sql = format!("{MEMBER_SELECT} WHERE insurer_calendar_date(\"PojištěníOd\") >= ?1 ORDER BY insurer_calendar_date(\"PojištěníOd\"), CAST(\"EvČíslo\" AS INTEGER), \"Příjmení\"");
     let mut statement = connection
         .prepare(&sql)
         .map_err(|_| "Přehled pro pojišťovnu se nepodařilo načíst.".to_string())?;
@@ -2189,38 +2227,8 @@ fn insurer_overview_from_date(
     })
 }
 
-#[tauri::command]
-fn export_insurer_overview_pdf(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    from_date: String,
-    expected_row_ids: Vec<i64>,
-) -> Result<Option<String>, String> {
-    authenticated_user(&state)?;
-    let date = NaiveDate::parse_from_str(from_date.trim(), "%Y-%m-%d")
-        .map_err(|_| "Zadejte platné datum.".to_string())?;
-    let connection = open_read_only(&working_database_path(&app)?)?;
-    let overview = insurer_overview_from_date(&connection, date)?;
-    let actual_ids = overview
-        .members
-        .iter()
-        .map(|member| member.row_id)
-        .collect::<Vec<_>>();
-    if actual_ids != expected_row_ids {
-        return Err("Data přehledu se mezitím změnila. Načtěte přehled znovu.".into());
-    }
-    let settings = receipts::load_settings(&connection)?;
-    let destination = rfd::FileDialog::new()
-        .set_file_name(format!(
-            "Prehled_pro_pojistovnu_{}.pdf",
-            overview.insurance_year
-        ))
-        .add_filter("PDF", &["pdf"])
-        .save_file();
-    let Some(destination) = destination else {
-        return Ok(None);
-    };
-    let rows = overview
+fn insurer_pdf_rows(overview: &InsurerOverview) -> Vec<reports::InsurerPdfRow> {
+    overview
         .members
         .iter()
         .enumerate()
@@ -2254,7 +2262,41 @@ fn export_insurer_overview_pdf(
                 },
             }
         })
-        .collect();
+        .collect()
+}
+
+#[tauri::command]
+fn export_insurer_overview_pdf(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    from_date: String,
+    expected_row_ids: Vec<i64>,
+) -> Result<Option<String>, String> {
+    authenticated_user(&state)?;
+    let date = NaiveDate::parse_from_str(from_date.trim(), "%Y-%m-%d")
+        .map_err(|_| "Zadejte platné datum.".to_string())?;
+    let connection = open_read_only(&working_database_path(&app)?)?;
+    let overview = insurer_overview_from_date(&connection, date)?;
+    let actual_ids = overview
+        .members
+        .iter()
+        .map(|member| member.row_id)
+        .collect::<Vec<_>>();
+    if actual_ids != expected_row_ids {
+        return Err("Data přehledu se mezitím změnila. Načtěte přehled znovu.".into());
+    }
+    let settings = receipts::load_settings(&connection)?;
+    let destination = rfd::FileDialog::new()
+        .set_file_name(format!(
+            "Prehled_pro_pojistovnu_{}.pdf",
+            overview.insurance_year
+        ))
+        .add_filter("PDF", &["pdf"])
+        .save_file();
+    let Some(destination) = destination else {
+        return Ok(None);
+    };
+    let rows = insurer_pdf_rows(&overview);
     reports::insurer_overview_pdf(
         &reports::InsurerPdf {
             policyholder: settings.policyholder,
@@ -5497,6 +5539,109 @@ mod tests {
         assert_eq!(
             certificate_batch_filename(2026, &organizations),
             "Potvrzeni_2026_Bohumin_stred_A.pdf"
+        );
+    }
+
+    #[test]
+    fn insurer_overview_april_boundary_uses_calendar_dates_and_filtered_totals() {
+        let (_directory, database) = synthetic_database();
+        let connection = open_write(&database).unwrap();
+        connection.execute("DELETE FROM Seznam", []).unwrap();
+        let dates = [
+            "2026-01-01",
+            "2026-03-15",
+            "2026-04-01",
+            "2026-05-15",
+            "1. 4. 2026",
+            "15.03.2026 12:30:00",
+            "01.04.2026 00:00:00",
+            "2026-04-01T00:00:00+02:00",
+            "2026-03-31T23:30:00-02:00",
+            "2026-04-01 23:59:59.999",
+            "01/04/2026",
+            "",
+            "invalid",
+        ];
+        for (index, date) in dates.iter().enumerate() {
+            connection.execute(
+                r#"INSERT INTO "Seznam" ("Identifikátor","EvČíslo","PojištěníOd","Příjmení","RočPojistné","Kategorie","Ztráta","PojistnáČástka","SkutÚhrada","PojistNespotř")
+                   VALUES (?1,?1,?2,'TEST',240000,'B',-1,700,500,100)"#,
+                params![index as i64 + 1, date],
+            ).unwrap();
+        }
+        drop(connection);
+        let connection = open_read_only(&database).unwrap();
+        let overview =
+            insurer_overview_from_date(&connection, NaiveDate::from_ymd_opt(2026, 4, 1).unwrap())
+                .unwrap();
+        let mut ids = overview
+            .members
+            .iter()
+            .map(|m| m.row_id)
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![3, 4, 5, 7, 8, 10, 11]);
+        assert_eq!(overview.total_premium, 4900);
+        assert_eq!(overview.total_paid, 3500);
+        // This is the same adapter used by the PDF command, fed by the UI query.
+        let rows = insurer_pdf_rows(&overview);
+        assert_eq!(rows.len(), overview.members.len());
+        for (row, member) in rows.iter().zip(&overview.members) {
+            assert_eq!(
+                row.registration_number,
+                member.registration_number.as_deref().unwrap()
+            );
+            assert_eq!(
+                row.insurance_from,
+                member.insurance_from.as_deref().unwrap()
+            );
+            assert_eq!(row.annual_limit, 240000);
+            assert_eq!(row.category, "B");
+            assert!(row.loss);
+        }
+        assert_eq!(
+            rows.iter().map(|row| row.premium).sum::<i64>(),
+            overview.total_premium
+        );
+        assert_eq!(rows.iter().map(|row| row.unused_premium).sum::<i64>(), 700);
+        let destination = std::env::var_os("FED_PDF_QA_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| database.parent().unwrap().to_path_buf())
+            .join("insurer-april-filter.pdf");
+        reports::insurer_overview_pdf(
+            &reports::InsurerPdf {
+                policyholder: "TEST".into(),
+                contract_number: "TEST".into(),
+                broker: "TEST".into(),
+                insurance_year: overview.insurance_year,
+                rows,
+            },
+            &destination,
+        )
+        .unwrap();
+        assert_eq!(
+            lopdf::Document::load(destination)
+                .unwrap()
+                .get_pages()
+                .len(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM Seznam", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            dates.len() as i64
+        );
+    }
+
+    #[test]
+    fn insurer_calendar_dates_reject_invalid_days_and_keep_leap_day() {
+        assert_eq!(insurer_calendar_date("2026-02-30"), None);
+        assert_eq!(insurer_calendar_date("31.04.2026"), None);
+        assert_eq!(insurer_calendar_date("2026-02-29"), None);
+        assert_eq!(
+            insurer_calendar_date(" 29.02.2024 "),
+            NaiveDate::from_ymd_opt(2024, 2, 29)
         );
     }
 

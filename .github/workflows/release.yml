@@ -77,6 +77,9 @@ jobs:
       - name: Frontend build
         run: npm run build
 
+      - name: Regresní testy přehledu a seznamu událostí
+        run: node --test scripts/test-insurer-ui.mjs
+
       - name: Příprava endpointu aktualizací
         shell: pwsh
         run: |
@@ -164,7 +167,15 @@ jobs:
           Copy-Item $signature.FullName "release-assets/$publishedSignatureName"
           $assetName = [Uri]::EscapeDataString($publishedNsisName)
           $downloadUrl = "https://github.com/${{ github.repository }}/releases/download/${{ env.BUILD_TAG }}/$assetName"
-          $releaseNotes = "Release ${{ env.BUILD_TAG }}`n`nDatum sestavení: $env:BUILD_DATE"
+          $changelog = Get-Content "src/content/whats-new.json" -Raw -Encoding utf8 | ConvertFrom-Json
+          $entry = $changelog.$version
+          if (-not $entry) { throw "Chybí poznámky k vydání $version." }
+          $noteLines = @("# Federace Pojištění $version", "", $entry.intro)
+          foreach ($section in $entry.sections) {
+            $noteLines += @("", "## $($section.title)", "")
+            $noteLines += @($section.items | ForEach-Object { "- $_" })
+          }
+          $releaseNotes = $noteLines -join "`n"
           $manifest = [ordered]@{
             version = $version
             notes = $releaseNotes

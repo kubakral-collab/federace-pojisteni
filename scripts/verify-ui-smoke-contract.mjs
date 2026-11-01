@@ -120,7 +120,7 @@ if (app.includes('"export_blank_application"') || backend.includes("fn export_bl
 }
 const navigationBlock = app.slice(app.indexOf("const navigation:"), app.indexOf("return (", app.indexOf("const navigation:")));
 if (navigationBlock.includes('label: "Historická data"')) missing.push("Historická data remain visible in navigation");
-if (packageJson.version !== "0.26.1") missing.push("package version 0.26.1");
+if (packageJson.version !== "0.27.0") missing.push("package version 0.27.0");
 if (!defaultCapability.includes('"core:window:allow-close"')) missing.push("member detail native window close permission");
 if (!defaultCapability.includes('"core:window:allow-destroy"')) missing.push("member detail native window destroy permission");
 if (!app.includes("getCurrentWindow().destroy()")) missing.push("member detail native window definitive leave");

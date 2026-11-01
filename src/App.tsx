@@ -1486,6 +1486,7 @@ export default function App() {
       return;
     }
     setInsurerLoading(true);
+    setInsurerOverview(null);
     setError("");
     try {
       setInsurerOverview(await invoke<InsurerOverview>("get_insurer_overview", { fromDate: insurerFromDate }));
@@ -2618,9 +2619,9 @@ export default function App() {
             <select value={claimStatusFilter} onChange={(event) => setClaimStatusFilter(event.target.value)}><option value="">Stav: vše</option><option>Otevřená</option><option>Uzavřená</option></select>
             <input value={claimOcFilter} onChange={(event) => setClaimOcFilter(event.target.value)} placeholder="Kód OC" />
           </div>
-          <div className="claims-table"><table><thead><tr><th>Číslo události</th><th>Člen</th><th>Evidenční číslo</th><th>Kód OC</th><th>Datum vzniku</th><th>Datum nahlášení</th><th>Typ události</th><th>Stav</th><th>Požadovaná částka</th><th>Vyplacená částka</th><th>Poslední změna</th><th>Akce</th></tr></thead><tbody>
-            {visibleClaims.map((claim) => <tr key={claim.id}><td>{claim.id}</td><td>{claim.memberName}</td><td>{claim.registrationNumber}</td><td>{claim.organizationCode}</td><td>{displayDate(claim.occurredOn)}</td><td>{displayDate(claim.reportedOn)}</td><td>{display(claim.description)}</td><td>{claim.status}{claim.linkStatus!=="VYRESENA"&&<small className="claim-link-warning"> · historická vazba k dořešení</small>}</td><td>{displayCurrency(claim.assessedDamage)}</td><td>{displayCurrency(claim.insuranceBenefit)}</td><td>{displayDateTime(claim.lastChanged)}</td><td className="row-actions"><button disabled={claim.linkStatus!=="VYRESENA"} title={claim.linkStatus==="VYRESENA"?"Uložit hlášení PDF":"Dokument vyžaduje vyřešenou historickou vazbu"} onClick={() => void exportClaimDocument(claim.id)}><FileText /></button><button disabled={claim.linkStatus!=="VYRESENA"} title={claim.linkStatus==="VYRESENA"?"Upravit událost":"Historický záznam je pouze pro čtení"} onClick={() => void editAgendaClaim(claim)}><Pencil /></button><button disabled={!claim.memberRowId} title={claim.memberRowId?"Otevřít detail člena":"Historická vazba na pojistný záznam není vyřešena"} onClick={() => { if(claim.memberRowId){setScreen("Seznam");void openMember(claim.memberRowId);} }}><Users /></button></td></tr>)}
-            {!claimsLoading && visibleClaims.length === 0 && <tr><td colSpan={12} className="empty-row">Nebyly nalezeny žádné pojistné události.</td></tr>}
+          <div className="claims-table"><table><thead><tr><th>Číslo události</th><th>Člen</th><th>Evidenční číslo</th><th>Kód OC</th><th>Datum vzniku</th><th>Datum nahlášení</th><th>Stav</th><th>Požadovaná částka</th><th>Vyplacená částka</th><th>Poslední změna</th><th>Akce</th></tr></thead><tbody>
+            {visibleClaims.map((claim) => <tr key={claim.id}><td>{claim.id}</td><td>{claim.memberName}</td><td>{claim.registrationNumber}</td><td>{claim.organizationCode}</td><td>{displayDate(claim.occurredOn)}</td><td>{displayDate(claim.reportedOn)}</td><td>{claim.status}{claim.linkStatus!=="VYRESENA"&&<small className="claim-link-warning"> · historická vazba k dořešení</small>}</td><td>{displayCurrency(claim.assessedDamage)}</td><td>{displayCurrency(claim.insuranceBenefit)}</td><td>{displayDateTime(claim.lastChanged)}</td><td className="row-actions"><button disabled={claim.linkStatus!=="VYRESENA"} title={claim.linkStatus==="VYRESENA"?"Uložit hlášení PDF":"Dokument vyžaduje vyřešenou historickou vazbu"} onClick={() => void exportClaimDocument(claim.id)}><FileText /></button><button disabled={claim.linkStatus!=="VYRESENA"} title={claim.linkStatus==="VYRESENA"?"Upravit událost":"Historický záznam je pouze pro čtení"} onClick={() => void editAgendaClaim(claim)}><Pencil /></button><button disabled={!claim.memberRowId} title={claim.memberRowId?"Otevřít detail člena":"Historická vazba na pojistný záznam není vyřešena"} onClick={() => { if(claim.memberRowId){setScreen("Seznam");void openMember(claim.memberRowId);} }}><Users /></button></td></tr>)}
+            {!claimsLoading && visibleClaims.length === 0 && <tr><td colSpan={11} className="empty-row">Nebyly nalezeny žádné pojistné události.</td></tr>}
           </tbody></table></div>
         </div>
       </Shell>
@@ -2637,7 +2638,7 @@ export default function App() {
           {error && <div className="message error">{error}</div>}
           <section className="overview-controls">
             <label>Pojištěnci od data:
-              <input type="date" value={insurerFromDate} disabled={insurerLoading} onChange={(event) => setInsurerFromDate(event.target.value)} />
+              <input type="date" value={insurerFromDate} disabled={insurerLoading} onChange={(event) => { setInsurerFromDate(event.target.value); setInsurerOverview(null); }} />
             </label>
             <button className="primary" disabled={insurerLoading || !insurerFromDate} onClick={() => void loadInsurerOverview()}>Zobrazit přehled</button>
           </section>
